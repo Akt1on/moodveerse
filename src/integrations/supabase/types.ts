@@ -47,6 +47,54 @@ export type Database = {
         }
         Relationships: []
       }
+      literary_works: {
+        Row: {
+          author: string
+          created_at: string
+          embedding: string | null
+          emotions_tags: string[]
+          external_id: string | null
+          id: string
+          language: string
+          mood_intensity: number | null
+          source_type: string
+          text: string
+          theme: string | null
+          title: string | null
+          year: number | null
+        }
+        Insert: {
+          author: string
+          created_at?: string
+          embedding?: string | null
+          emotions_tags?: string[]
+          external_id?: string | null
+          id?: string
+          language?: string
+          mood_intensity?: number | null
+          source_type: string
+          text: string
+          theme?: string | null
+          title?: string | null
+          year?: number | null
+        }
+        Update: {
+          author?: string
+          created_at?: string
+          embedding?: string | null
+          emotions_tags?: string[]
+          external_id?: string | null
+          id?: string
+          language?: string
+          mood_intensity?: number | null
+          source_type?: string
+          text?: string
+          theme?: string | null
+          title?: string | null
+          year?: number | null
+        }
+        Relationships: []
+      }
       mood_entries: {
         Row: {
           context: string | null
@@ -109,7 +157,26 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      match_literary_works: {
+        Args: {
+          filter_emotions?: string[]
+          filter_language?: string
+          match_count?: number
+          query_embedding: string
+          similarity_threshold?: number
+        }
+        Returns: {
+          author: string
+          emotions_tags: string[]
+          id: string
+          language: string
+          similarity: number
+          source_type: string
+          text: string
+          title: string
+          year: number
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never
