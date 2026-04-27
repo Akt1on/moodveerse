@@ -1,0 +1,123 @@
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Slider } from "@/components/ui/slider";
+import { Sparkles, Plus, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+
+export const EMOTIONS = [
+  "Грусть", "Меланхолия", "Одиночество", "Тревога", "Гнев", "Радость",
+  "Вдохновение", "Надежда", "Любовь", "Принятие", "Усталость", "Благодарность",
+  "Тоска", "Нежность", "Тишина", "Сомнение",
+];
+
+const CONTEXTS = ["Отношения", "Работа", "Саморазвитие", "Потеря", "Семья", "Творчество", "Здоровье", "—"];
+
+export type MoodInput = {
+  input_text: string;
+  emotions: string[];
+  intensity: number;
+  context: string;
+};
+
+export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => void; loading: boolean }) => {
+  const [text, setText] = useState("");
+  const [emotions, setEmotions] = useState<string[]>([]);
+  const [custom, setCustom] = useState("");
+  const [intensity, setIntensity] = useState([6]);
+  const [ctx, setCtx] = useState("—");
+
+  const toggle = (e: string) => setEmotions(p => p.includes(e) ? p.filter(x => x !== e) : [...p, e]);
+  const addCustom = () => {
+    const v = custom.trim();
+    if (v && !emotions.includes(v)) setEmotions(p => [...p, v]);
+    setCustom("");
+  };
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (text.trim().length < 3) return;
+    onSubmit({ input_text: text.trim(), emotions, intensity: intensity[0], context: ctx === "—" ? "" : ctx });
+  };
+
+  return (
+    <form onSubmit={submit} className="space-y-6 animate-fade-up">
+      <div className="relative">
+        <Textarea
+          value={text}
+          onChange={e => setText(e.target.value)}
+          placeholder="Опишите, что вы чувствуете прямо сейчас... Какие эмоции, мысли, ощущения? (грусть, одиночество, тревога, надежда, гнев, радость и т.д.)"
+          maxLength={2000}
+          className="min-h-[160px] resize-none rounded-2xl bg-card/60 backdrop-blur-md border-border/60 px-6 py-5 text-base font-serif italic placeholder:text-muted-foreground/60 placeholder:italic shadow-card focus-visible:ring-primary/40"
+        />
+        <div className="absolute bottom-3 right-4 text-xs text-muted-foreground/60">
+          {text.length}/2000
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground/80 text-center">Эмоции (по желанию)</p>
+        <div className="flex flex-wrap gap-2 justify-center">
+          {[...EMOTIONS, ...emotions.filter(e => !EMOTIONS.includes(e))].map(e => {
+            const on = emotions.includes(e);
+            return (
+              <button type="button" key={e} onClick={() => toggle(e)}
+                className={`px-3.5 py-1.5 rounded-full text-sm border transition-soft ${
+                  on
+                    ? "bg-primary text-primary-foreground border-primary shadow-glow scale-105"
+                    : "bg-card/50 text-foreground/80 border-border hover:border-primary/50 hover:bg-card"
+                }`}>
+                {e}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex gap-2 justify-center max-w-sm mx-auto">
+          <Input
+            value={custom}
+            onChange={e => setCustom(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && (e.preventDefault(), addCustom())}
+            placeholder="Своя эмоция..."
+            maxLength={30}
+            className="rounded-full bg-card/40 border-border/60 text-sm h-9"
+          />
+          <Button type="button" size="icon" variant="outline" className="rounded-full h-9 w-9 shrink-0" onClick={addCustom}>
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid sm:grid-cols-2 gap-6">
+        <div className="space-y-2">
+          <div className="flex justify-between text-xs uppercase tracking-[0.2em] text-muted-foreground/80">
+            <span>Интенсивность</span><span className="text-primary">{intensity[0]} / 10</span>
+          </div>
+          <Slider value={intensity} onValueChange={setIntensity} min={1} max={10} step={1} />
+        </div>
+        <div className="space-y-2">
+          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground/80">Контекст</p>
+          <div className="flex flex-wrap gap-1.5">
+            {CONTEXTS.map(c => (
+              <button type="button" key={c} onClick={() => setCtx(c)}
+                className={`px-3 py-1 rounded-full text-xs border transition-soft ${
+                  ctx === c ? "bg-accent text-accent-foreground border-accent" : "border-border/60 text-muted-foreground hover:text-foreground"
+                }`}>{c}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex justify-center pt-2">
+        <Button
+          type="submit"
+          disabled={loading || text.trim().length < 3}
+          size="lg"
+          className="rounded-full px-10 py-6 text-base font-serif italic bg-gradient-button text-primary-foreground shadow-glow hover:shadow-soft hover:scale-[1.02] transition-soft disabled:opacity-50 disabled:hover:scale-100"
+        >
+          <Sparkles className="h-4 w-4 mr-2" />
+          {loading ? "Ищем резонанс..." : "Найти резонанс"}
+        </Button>
+      </div>
+    </form>
+  );
+};
