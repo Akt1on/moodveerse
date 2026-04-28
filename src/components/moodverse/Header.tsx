@@ -19,7 +19,7 @@ export const Header = () => {
       <div className="container max-w-6xl flex items-center justify-between py-3">
         <Link to="/" className="flex items-center gap-2 group">
           <Sparkles className="h-5 w-5 text-primary group-hover:animate-pulse" />
-          <span className="font-serif text-2xl italic tracking-wide">MoodVerse</span>
+          <span className="font-serif text-2xl italic tracking-wide">Я раньше здесь бывал...</span>
         </Link>
         <nav className="hidden md:flex items-center gap-1">
           {link("/", "Резонанс")}
