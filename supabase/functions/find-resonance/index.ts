@@ -6,18 +6,59 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const SYSTEM_PROMPT = `Ты — глубоко эмпатичный литературный собеседник, знаток мировой и русской поэзии, прозы и кино. Твоя задача — выбрать из предложенного списка кандидатов 6–8 произведений, которые точнее всего резонируют с эмоциональным состоянием человека, и для каждого написать тёплое личное объяснение.
+const SYSTEM_PROMPT = `Ты — глубоко эмпатичный литературный собеседник, знаток мировой, русской и армянской поэзии, прозы и кино (Нарекаци, Туманян, Чаренц, Терьян, Севак, Исаакян, Капутикян, Сароян, Параджанов, Эгоян, Азнавур и др.). Твоя задача — выбрать из предложенного списка кандидатов 6–8 произведений, которые точнее всего резонируют с эмоциональным состоянием человека, и для каждого написать тёплое личное объяснение.
 
 ЖЕЛЕЗНЫЕ ПРАВИЛА:
 - ПРИОРИТЕТ — РЕАЛЬНЫМ работам из списка КАНДИДАТЫ. Не выдумывай авторов и тексты.
 - Если в кандидатах достаточно подходящего — НЕ создавай оригинальных стилизаций. Стилизация (is_original=true, author="По мотивам …") — только если кандидатов мало или они не отзываются.
 - Глубокий эмоциональный резонанс важнее ключевых слов.
 - Баланс набора: что-то признающее боль, что-то утешающее, что-то с тихим лучом надежды или преображения, хотя бы один неожиданный ракурс.
-- Микс источников: поэзия + проза + кино/афоризм.
+- Микс источников: поэзия + проза + кино/афоризм. По возможности включай разные культуры — русскую, мировую и армянскую — если они есть среди кандидатов.
 - Сохраняй текст отрывка ТОЧНО как в кандидате (не сокращай, не переписывай).
 - explanation — тёплое, личное, на «вы», 1–2 предложения, почему именно это отзывается ИМЕННО с этим состоянием.
 - relevance_score: 70–99.
-- ВСЕГДА на русском.`;
+- Объяснения ВСЕГДА на русском, даже если текст произведения на другом языке.`;
+
+const ANALYZER_PROMPT = `Ты — психолог-аналитик эмоций. По короткому описанию состояния человека определи скрытые эмоциональные пласты, тему и желаемый отклик. Отвечай строго через инструмент.`;
+
+async function analyzeEmotions(input: string, emotions: string[], context: string, apiKey: string): Promise<{ deep_emotions: string[]; theme: string; desired_response: string } | null> {
+  try {
+    const r = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "system", content: ANALYZER_PROMPT },
+          { role: "user", content: `Состояние: "${input}"\nЭмоции, которые назвал: ${emotions.join(", ") || "—"}\nКонтекст: ${context || "—"}` },
+        ],
+        tools: [{
+          type: "function",
+          function: {
+            name: "analyze",
+            description: "Анализ эмоций",
+            parameters: {
+              type: "object",
+              properties: {
+                deep_emotions: { type: "array", items: { type: "string" }, description: "5–8 точных эмоций (на русском, в нижнем регистре)" },
+                theme: { type: "string", description: "Главная тема в 1–3 словах" },
+                desired_response: { type: "string", enum: ["утешение", "понимание", "вдохновение", "тишина", "катарсис", "надежда"] },
+              },
+              required: ["deep_emotions", "theme", "desired_response"],
+              additionalProperties: false,
+            },
+          },
+        }],
+        tool_choice: { type: "function", function: { name: "analyze" } },
+      }),
+    });
+    if (!r.ok) { console.warn("analyzer failed", r.status); return null; }
+    const j = await r.json();
+    const tc = j.choices?.[0]?.message?.tool_calls?.[0];
+    if (!tc) return null;
+    return JSON.parse(tc.function.arguments);
+  } catch (e) { console.warn("analyzer error", e); return null; }
+}
 
 type Candidate = {
   id?: string;
@@ -99,7 +140,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { input_text, emotions = [], intensity, context } = await req.json();
+    const { input_text, emotions = [], intensity, context, language_pref } = await req.json();
     if (!input_text || typeof input_text !== "string" || input_text.trim().length < 3) {
       return new Response(JSON.stringify({ error: "Опишите чувство подробнее" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -112,38 +153,65 @@ serve(async (req) => {
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
-    // 1. Build embedding query that captures the FEELING beneath the words.
+    // 1. AGENT-АНАЛИЗАТОР: углубляем понимание эмоций.
+    const analysis = await analyzeEmotions(input_text, emotions, context || "", LOVABLE_API_KEY);
+    const deepEmotions = analysis?.deep_emotions ?? [];
+
+    // 2. Build embedding query that captures the FEELING beneath the words.
     const embedQuery = [
       input_text,
       emotions.length ? `Эмоции: ${emotions.join(", ")}` : "",
+      deepEmotions.length ? `Глубинные пласты: ${deepEmotions.join(", ")}` : "",
+      analysis?.theme ? `Тема: ${analysis.theme}` : "",
+      analysis?.desired_response ? `Нужен отклик: ${analysis.desired_response}` : "",
       intensity ? `Интенсивность ${intensity}/10` : "",
       context ? `Контекст: ${context}` : "",
     ].filter(Boolean).join("\n");
 
-    // 2. Run embedding + external APIs in parallel.
+    // 3. Run embedding + external APIs in parallel.
     const [queryEmbedding, poetryDb, quotable] = await Promise.all([
       embed(embedQuery, LOVABLE_API_KEY),
       fetchPoetryDB(emotions),
       fetchQuotable(emotions),
     ]);
 
-    // 3. pgvector semantic search.
+    // 4. pgvector semantic search — двухпроходный, чтобы предпочтение языку, но без жёсткой отсечки.
     let vectorCandidates: Candidate[] = [];
     if (queryEmbedding) {
-      const { data, error } = await supabase.rpc("match_literary_works", {
-        query_embedding: queryEmbedding as any,
-        match_count: 18,
-        filter_language: null,
-        filter_emotions: null,
-        similarity_threshold: 0.0,
-      });
-      if (error) console.error("rpc error", error);
-      else if (Array.isArray(data)) {
-        vectorCandidates = data.map((d: any): Candidate => ({
-          id: d.id, text: d.text, author: d.author, title: d.title,
-          source_type: d.source_type, year: d.year, language: d.language,
-          similarity: d.similarity, origin: "vector",
+      const lang = (language_pref && ["ru", "hy", "en"].includes(language_pref)) ? language_pref : null;
+
+      const calls: Promise<any>[] = [
+        supabase.rpc("match_literary_works", {
+          query_embedding: queryEmbedding as any,
+          match_count: 16,
+          filter_language: null,
+          filter_emotions: null,
+          similarity_threshold: 0.0,
+        }),
+      ];
+      if (lang) {
+        calls.push(supabase.rpc("match_literary_works", {
+          query_embedding: queryEmbedding as any,
+          match_count: 10,
+          filter_language: lang,
+          filter_emotions: null,
+          similarity_threshold: 0.0,
         }));
+      }
+      const results = await Promise.all(calls);
+      const seen = new Set<string>();
+      for (const r of results) {
+        if (r.error) { console.error("rpc error", r.error); continue; }
+        if (!Array.isArray(r.data)) continue;
+        for (const d of r.data) {
+          if (seen.has(d.id)) continue;
+          seen.add(d.id);
+          vectorCandidates.push({
+            id: d.id, text: d.text, author: d.author, title: d.title,
+            source_type: d.source_type, year: d.year, language: d.language,
+            similarity: d.similarity, origin: "vector",
+          });
+        }
       }
     }
 
@@ -160,8 +228,12 @@ serve(async (req) => {
     const userPrompt = `СОСТОЯНИЕ ПОЛЬЗОВАТЕЛЯ:
 "${input_text}"
 Эмоции: ${emotions.length ? emotions.join(", ") : "не указаны"}
+Глубинные пласты (анализ): ${deepEmotions.join(", ") || "—"}
+Тема: ${analysis?.theme || "—"}
+Желаемый отклик: ${analysis?.desired_response || "—"}
 Интенсивность: ${intensity ?? "не указана"} / 10
 Контекст: ${context || "не указан"}
+Предпочтение языка: ${language_pref || "любой"}
 
 КАНДИДАТЫ (выбери 6–8 самых резонансных, верни их text ДОСЛОВНО):
 ${JSON.stringify(candidatesPayload, null, 0)}`;
@@ -241,11 +313,13 @@ ${JSON.stringify(candidatesPayload, null, 0)}`;
     const args = JSON.parse(toolCall.function.arguments);
     return new Response(JSON.stringify({
       pieces: args.pieces || [],
+      analysis,
       meta: {
         candidates_total: candidates.length,
         from_vector: vectorCandidates.length,
         from_poetrydb: poetryDb.length,
         from_quotable: quotable.length,
+        language_pref: language_pref || null,
       },
     }), {
       status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
