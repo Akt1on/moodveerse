@@ -8,22 +8,10 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-async function embed(text: string, apiKey: string): Promise<number[]> {
-  const r = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "openai/text-embedding-3-small", input: text }),
-  });
-  if (!r.ok) throw new Error(`embed ${r.status}: ${await r.text()}`);
-  const j = await r.json();
-  return j.data[0].embedding;
-}
-
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY")!;
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
     const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
@@ -41,41 +29,55 @@ serve(async (req) => {
       });
     }
 
-    let inserted = 0, skipped = 0, failed = 0;
-    for (const p of ALL_SEED) {
-      try {
-        const { data: existing } = await supabase
-          .from("literary_works")
-          .select("id")
-          .eq("source_type", p.source_type)
-          .eq("external_id", p.external_id)
-          .maybeSingle();
-        if (existing) { skipped++; continue; }
+    // Bulk-fetch existing external_ids in one query.
+    const externalIds = ALL_SEED.map((p) => p.external_id);
+    const { data: existing } = await supabase
+      .from("literary_works")
+      .select("external_id")
+      .in("external_id", externalIds);
+    const have = new Set((existing ?? []).map((r: any) => r.external_id));
 
-        const embedInput = `${p.title ?? ""}\n${p.author}\n${p.text}`.slice(0, 8000);
-        const embedding = await embed(embedInput, LOVABLE_API_KEY);
+    const toInsert = ALL_SEED
+      .filter((p) => !have.has(p.external_id))
+      .map((p) => ({
+        text: p.text,
+        author: p.author,
+        title: p.title ?? null,
+        source_type: p.source_type,
+        emotions_tags: p.emotions_tags,
+        language: p.language,
+        year: p.year ?? null,
+        external_id: p.external_id,
+      }));
 
-        const { error } = await supabase.from("literary_works").insert({
-          text: p.text, author: p.author, title: p.title ?? null,
-          source_type: p.source_type, emotions_tags: p.emotions_tags,
-          language: p.language, year: p.year ?? null,
-          external_id: p.external_id, embedding: embedding as any,
-        });
-        if (error) { console.error(p.external_id, error); failed++; }
-        else inserted++;
-      } catch (e) {
-        console.error(p.external_id, e);
-        failed++;
+    let inserted = 0;
+    let failed = 0;
+    const skipped = ALL_SEED.length - toInsert.length;
+
+    // Batch insert in chunks of 50.
+    for (let i = 0; i < toInsert.length; i += 50) {
+      const chunk = toInsert.slice(i, i + 50);
+      const { error, data } = await supabase
+        .from("literary_works")
+        .insert(chunk)
+        .select("id");
+      if (error) {
+        console.error("batch error", i, error);
+        failed += chunk.length;
+      } else {
+        inserted += data?.length ?? chunk.length;
       }
     }
 
-    return new Response(JSON.stringify({ inserted, skipped, failed, total_seed: ALL_SEED.length }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ inserted, skipped, failed, total_seed: ALL_SEED.length }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
   } catch (e) {
     console.error("seed-library error:", e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown" }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ error: e instanceof Error ? e.message : "Unknown" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
   }
 });

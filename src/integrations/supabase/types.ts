@@ -57,6 +57,8 @@ export type Database = {
           id: string
           language: string
           mood_intensity: number | null
+          search_doc: string | null
+          search_tsv: unknown
           source_type: string
           text: string
           theme: string | null
@@ -72,6 +74,8 @@ export type Database = {
           id?: string
           language?: string
           mood_intensity?: number | null
+          search_doc?: string | null
+          search_tsv?: unknown
           source_type: string
           text: string
           theme?: string | null
@@ -87,6 +91,8 @@ export type Database = {
           id?: string
           language?: string
           mood_intensity?: number | null
+          search_doc?: string | null
+          search_tsv?: unknown
           source_type?: string
           text?: string
           theme?: string | null
@@ -157,6 +163,25 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      match_literary_lexical: {
+        Args: {
+          match_count?: number
+          preferred_language?: string
+          query_emotions?: string[]
+          query_text: string
+        }
+        Returns: {
+          author: string
+          emotions_tags: string[]
+          id: string
+          language: string
+          score: number
+          source_type: string
+          text: string
+          title: string
+          year: number
+        }[]
+      }
       match_literary_works: {
         Args: {
           filter_emotions?: string[]
@@ -177,6 +202,8 @@ export type Database = {
           year: number
         }[]
       }
+      show_limit: { Args: never; Returns: number }
+      show_trgm: { Args: { "": string }; Returns: string[] }
     }
     Enums: {
       [_ in never]: never
