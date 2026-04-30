@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { SEED } from "./seed-data.ts";
+import { SEED_HY, SEED_EXTRA } from "./seed-data-armenian.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -27,19 +28,21 @@ serve(async (req) => {
     const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
+    const ALL_SEED = [...SEED, ...SEED_HY, ...SEED_EXTRA];
+
     const { count } = await supabase
       .from("literary_works")
       .select("*", { count: "exact", head: true });
 
     const force = new URL(req.url).searchParams.get("force") === "1";
-    if ((count ?? 0) >= 100 && !force) {
+    if ((count ?? 0) >= ALL_SEED.length && !force) {
       return new Response(JSON.stringify({ skipped: true, count }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     let inserted = 0, skipped = 0, failed = 0;
-    for (const p of SEED) {
+    for (const p of ALL_SEED) {
       try {
         const { data: existing } = await supabase
           .from("literary_works")
@@ -66,7 +69,7 @@ serve(async (req) => {
       }
     }
 
-    return new Response(JSON.stringify({ inserted, skipped, failed, total_seed: SEED.length }), {
+    return new Response(JSON.stringify({ inserted, skipped, failed, total_seed: ALL_SEED.length }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

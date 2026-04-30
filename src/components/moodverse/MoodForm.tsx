@@ -13,11 +13,19 @@ export const EMOTIONS = [
 
 const CONTEXTS = ["Отношения", "Работа", "Саморазвитие", "Потеря", "Семья", "Творчество", "Здоровье", "—"];
 
+const LANGUAGES: { value: "any" | "ru" | "hy" | "en"; label: string }[] = [
+  { value: "any", label: "Любой" },
+  { value: "ru", label: "Русский" },
+  { value: "hy", label: "Հայերեն" },
+  { value: "en", label: "English" },
+];
+
 export type MoodInput = {
   input_text: string;
   emotions: string[];
   intensity: number;
   context: string;
+  language_pref?: "any" | "ru" | "hy" | "en";
 };
 
 export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => void; loading: boolean }) => {
@@ -26,6 +34,7 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
   const [custom, setCustom] = useState("");
   const [intensity, setIntensity] = useState([6]);
   const [ctx, setCtx] = useState("—");
+  const [lang, setLang] = useState<"any" | "ru" | "hy" | "en">("any");
 
   const toggle = (e: string) => setEmotions(p => p.includes(e) ? p.filter(x => x !== e) : [...p, e]);
   const addCustom = () => {
@@ -37,7 +46,13 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (text.trim().length < 3) return;
-    onSubmit({ input_text: text.trim(), emotions, intensity: intensity[0], context: ctx === "—" ? "" : ctx });
+    onSubmit({
+      input_text: text.trim(),
+      emotions,
+      intensity: intensity[0],
+      context: ctx === "—" ? "" : ctx,
+      language_pref: lang,
+    });
   };
 
   return (
@@ -104,6 +119,18 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
                 }`}>{c}</button>
             ))}
           </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground/80 text-center">Язык произведений</p>
+        <div className="flex flex-wrap gap-1.5 justify-center">
+          {LANGUAGES.map(l => (
+            <button type="button" key={l.value} onClick={() => setLang(l.value)}
+              className={`px-3.5 py-1 rounded-full text-xs border transition-soft ${
+                lang === l.value ? "bg-accent text-accent-foreground border-accent" : "border-border/60 text-muted-foreground hover:text-foreground"
+              }`}>{l.label}</button>
+          ))}
         </div>
       </div>
 
