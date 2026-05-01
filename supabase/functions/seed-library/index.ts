@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { SEED } from "./seed-data.ts";
 import { SEED_HY, SEED_EXTRA } from "./seed-data-armenian.ts";
+import { SEED_BIBLE } from "./seed-data-bible.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -16,7 +17,7 @@ serve(async (req) => {
     const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
-    const ALL_SEED = [...SEED, ...SEED_HY, ...SEED_EXTRA];
+    const ALL_SEED = [...SEED, ...SEED_HY, ...SEED_EXTRA, ...SEED_BIBLE];
 
     const { count } = await supabase
       .from("literary_works")

@@ -18,7 +18,7 @@ const Index = () => {
 
   // One-time silent seeding of the literary knowledge base.
   useEffect(() => {
-    const KEY = "moodverse_seeded_v3";
+    const KEY = "moodverse_seeded_v4_bible";
     if (localStorage.getItem(KEY)) return;
     supabase.functions.invoke("seed-library", { body: {} })
       .then(({ data, error }) => {

@@ -1,7 +1,8 @@
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
-import { BookHeart, Sparkles, LogOut, User as UserIcon } from "lucide-react";
+import { BookHeart, LogOut, User as UserIcon } from "lucide-react";
+import logo from "@/assets/moodverse-logo.png";
 
 export const Header = () => {
   const { user, signOut } = useAuth();
@@ -17,9 +18,16 @@ export const Header = () => {
   return (
     <header className="sticky top-0 z-30 backdrop-blur-xl bg-background/40 border-b border-border/40">
       <div className="container max-w-6xl flex items-center justify-between py-3">
-        <Link to="/" className="flex items-center gap-2 group">
-          <Sparkles className="h-5 w-5 text-primary group-hover:animate-pulse" />
-          <span className="font-serif text-2xl italic tracking-wide">Я раньше здесь бывал...</span>
+        <Link to="/" className="flex items-center gap-2 group" aria-label="MoodVerse — на главную">
+          <img
+            src={logo}
+            alt="MoodVerse"
+            width={32}
+            height={32}
+            className="h-8 w-8 transition-soft group-hover:scale-105"
+            decoding="async"
+          />
+          <span className="font-serif text-xl sm:text-2xl italic tracking-wide">MoodVerse</span>
         </Link>
         <nav className="hidden md:flex items-center gap-1">
           {link("/", "Резонанс")}

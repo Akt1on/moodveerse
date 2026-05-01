@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Heart, Share2, Volume2, Copy, Check, ChevronDown, Star } from "lucide-react";
+import { Heart, Volume2, Copy, Check, ChevronDown, Star } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { ShareMenu } from "./ShareMenu";
 
 export type Piece = {
   title: string;
@@ -36,14 +37,6 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
     setCopied(true);
     toast.success("Скопировано");
     setTimeout(() => setCopied(false), 2000);
-  };
-
-  const share = async () => {
-    const data = { title: `${piece.author} — ${piece.title}`, text: piece.text };
-    try {
-      if (navigator.share) await navigator.share(data);
-      else { await copy(); toast.info("Готово к отправке"); }
-    } catch {}
   };
 
   const speak = () => {
@@ -119,9 +112,10 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
           <Volume2 className={`h-3.5 w-3.5 mr-1.5 ${speaking ? "text-primary" : ""}`} />
           {speaking ? "Стоп" : "Озвучить"}
         </Button>
-        <Button size="sm" variant="ghost" onClick={share} className="rounded-full text-xs h-8">
-          <Share2 className="h-3.5 w-3.5 mr-1.5" />Поделиться
-        </Button>
+        <ShareMenu
+          title={`${piece.author}${piece.title ? ` — «${piece.title}»` : ""}`}
+          text={piece.text}
+        />
         <Button size="sm" variant="ghost" onClick={copy} className="rounded-full text-xs h-8">
           {copied ? <Check className="h-3.5 w-3.5 mr-1.5" /> : <Copy className="h-3.5 w-3.5 mr-1.5" />}
           Копировать
