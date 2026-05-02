@@ -14,3 +14,4 @@ Stack: Lovable Cloud + Lovable AI Gateway (google/gemini-2.5-pro). All external 
 - [Hybrid search architecture](mem://architecture/hybrid-search) — APIs → pgvector → AI fallback flow
 - [Literary works knowledge base](mem://architecture/literary-works-table) — pgvector table schema and embedding pipeline
 - [Design system](mem://design/misty-blue) — Misty Blue tokens, typography, motion
+- [Personal memory agent](mem://features/personal-memory) — user_memory table + memory-agent edge function feeding find-resonance
