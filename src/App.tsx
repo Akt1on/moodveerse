@@ -9,6 +9,7 @@ import Index from "./pages/Index.tsx"; // keep eager — landing page
 const Auth = lazy(() => import("./pages/Auth.tsx"));
 const Journal = lazy(() => import("./pages/Journal.tsx"));
 const Favorites = lazy(() => import("./pages/Favorites.tsx"));
+const Journey = lazy(() => import("./pages/Journey.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
 const queryClient = new QueryClient({
@@ -30,6 +31,7 @@ const App = () => (
               <Route path="/auth" element={<Auth />} />
               <Route path="/journal" element={<Journal />} />
               <Route path="/favorites" element={<Favorites />} />
+              <Route path="/journey" element={<Journey />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
