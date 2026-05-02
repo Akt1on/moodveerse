@@ -45,8 +45,27 @@ serve(async (req) => {
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
     const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
+
+    // Optional: read user memory if user is authenticated
+    let userMemory: { summary?: string; recurring_themes?: string[]; dominant_emotions?: string[]; agent_notes?: string } | null = null;
+    const authHeader = req.headers.get("Authorization") || "";
+    if (authHeader && authHeader !== `Bearer ${ANON}`) {
+      try {
+        const userClient = createClient(SUPABASE_URL, ANON, { global: { headers: { Authorization: authHeader } } });
+        const { data: ud } = await userClient.auth.getUser();
+        if (ud?.user) {
+          const { data: mem } = await supabase
+            .from("user_memory")
+            .select("summary, recurring_themes, dominant_emotions, agent_notes")
+            .eq("user_id", ud.user.id)
+            .maybeSingle();
+          if (mem) userMemory = mem as any;
+        }
+      } catch (e) { console.log("memory lookup skipped:", e); }
+    }
 
     const lang = (language_pref && ["ru", "hy", "en"].includes(language_pref)) ? language_pref : null;
     const lowerEmotions = emotions.map((e: string) => e.toLowerCase());
@@ -114,7 +133,12 @@ serve(async (req) => {
 Интенсивность: ${intensity ?? "—"} / 10
 Контекст: ${context || "—"}
 Предпочтение языка: ${language_pref || "любой"}
-
+${userMemory ? `\nЭМОЦИОНАЛЬНЫЙ ПРОФИЛЬ ЭТОГО ЧЕЛОВЕКА (учти, но не цитируй вслух):
+- Резюме: ${userMemory.summary || "—"}
+- Возвращающиеся темы: ${(userMemory.recurring_themes || []).join(", ") || "—"}
+- Доминирующие состояния: ${(userMemory.dominant_emotions || []).join(", ") || "—"}
+- Заметки куратора: ${userMemory.agent_notes || "—"}
+Используй это, чтобы избегать повторения уже знакомых ему произведений и мягко вести его дальше по эмоциональному пути.\n` : ""}
 КАНДИДАТЫ (выбери 6–8 самых резонансных, верни их text ДОСЛОВНО):
 ${JSON.stringify(candidatesPayload)}`;
 
@@ -197,6 +221,7 @@ ${JSON.stringify(candidatesPayload)}`;
         from_lexical: candidates.filter(c => c.origin === "lexical").length,
         from_random: candidates.filter(c => c.origin === "random").length,
         language_pref: language_pref || null,
+        used_memory: !!userMemory,
       },
     }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e) {

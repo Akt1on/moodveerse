@@ -158,6 +158,39 @@ export type Database = {
         }
         Relationships: []
       }
+      user_memory: {
+        Row: {
+          agent_notes: string | null
+          created_at: string
+          dominant_emotions: string[]
+          entries_analyzed: number
+          recurring_themes: string[]
+          summary: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          agent_notes?: string | null
+          created_at?: string
+          dominant_emotions?: string[]
+          entries_analyzed?: number
+          recurring_themes?: string[]
+          summary?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          agent_notes?: string | null
+          created_at?: string
+          dominant_emotions?: string[]
+          entries_analyzed?: number
+          recurring_themes?: string[]
+          summary?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

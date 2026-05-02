@@ -32,6 +32,7 @@ export const Header = () => {
         <nav className="hidden md:flex items-center gap-1">
           {link("/", "Резонанс")}
           {user && link("/journal", "Журнал")}
+          {user && link("/journey", "Путь")}
           {user && link("/favorites", "Избранное")}
         </nav>
         <div className="flex items-center gap-2">
@@ -56,6 +57,7 @@ export const Header = () => {
         <nav className="md:hidden flex items-center justify-center gap-1 pb-2">
           {link("/", "Резонанс")}
           {link("/journal", "Журнал")}
+          {link("/journey", "Путь")}
           {link("/favorites", "Избранное")}
         </nav>
       )}
