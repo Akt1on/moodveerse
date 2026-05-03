@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
-import { Sparkles, Plus, X, Users } from "lucide-react";
+import { Sparkles, Plus, X, Users, Mic, MicOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { toast } from "sonner";
 
 export const EMOTIONS = [
   "Грусть", "Меланхолия", "Одиночество", "Тревога", "Гнев", "Радость",
@@ -37,6 +38,62 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
   const [ctx, setCtx] = useState("—");
   const [lang, setLang] = useState<"any" | "ru" | "hy" | "en">("any");
   const [mode, setMode] = useState<"single" | "council">("single");
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
+  const speechSupported = typeof window !== "undefined" &&
+    !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+
+  useEffect(() => () => {
+    try { recognitionRef.current?.stop?.(); } catch {}
+  }, []);
+
+  const toggleMic = () => {
+    if (!speechSupported) {
+      toast.error("Голосовой ввод не поддерживается в этом браузере");
+      return;
+    }
+    if (listening) {
+      recognitionRef.current?.stop?.();
+      setListening(false);
+      return;
+    }
+    const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const rec = new SR();
+    rec.lang = lang === "en" ? "en-US" : lang === "hy" ? "hy-AM" : "ru-RU";
+    rec.interimResults = true;
+    rec.continuous = true;
+    let baseText = text;
+    rec.onresult = (e: any) => {
+      let interim = "";
+      let final = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) final += r[0].transcript;
+        else interim += r[0].transcript;
+      }
+      if (final) {
+        baseText = (baseText ? baseText + " " : "") + final.trim();
+        setText(baseText);
+      } else if (interim) {
+        setText((baseText ? baseText + " " : "") + interim);
+      }
+    };
+    rec.onerror = (e: any) => {
+      console.error("SR error", e);
+      if (e.error !== "aborted") toast.error("Ошибка распознавания");
+      setListening(false);
+    };
+    rec.onend = () => setListening(false);
+    recognitionRef.current = rec;
+    try {
+      rec.start();
+      setListening(true);
+      toast.success("Говорите...");
+    } catch (err) {
+      console.error(err);
+      toast.error("Не удалось запустить микрофон");
+    }
+  };
 
   const toggle = (e: string) => setEmotions(p => p.includes(e) ? p.filter(x => x !== e) : [...p, e]);
   const addCustom = () => {
@@ -71,6 +128,20 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
         <div className="absolute bottom-3 right-4 text-xs text-muted-foreground/60">
           {text.length}/2000
         </div>
+        {speechSupported && (
+          <button
+            type="button"
+            onClick={toggleMic}
+            title={listening ? "Остановить запись" : "Надиктовать голосом"}
+            className={`absolute top-3 right-3 h-9 w-9 rounded-full flex items-center justify-center border transition-soft ${
+              listening
+                ? "bg-destructive/15 border-destructive/40 text-destructive animate-pulse"
+                : "bg-card/70 border-border/60 text-muted-foreground hover:text-primary hover:border-primary/40"
+            }`}
+          >
+            {listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+          </button>
+        )}
       </div>
 
       <div className="space-y-3">
