@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Heart, Volume2, Copy, Check, ChevronDown, Star } from "lucide-react";
+import { Heart, Volume2, Copy, Check, ChevronDown, Star, Loader2, Pause } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -23,12 +23,19 @@ const typeLabel: Record<Piece["source_type"], string> = {
   poem: "Стихотворение", book: "Книга", film: "Фильм", quote: "Цитата",
 };
 
+const detectLang = (text: string): "ru" | "hy" | "en" => {
+  if (/[\u0530-\u058F]/.test(text)) return "hy";
+  if (/[\u0400-\u04FF]/.test(text)) return "ru";
+  return "en";
+};
+
 export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => {
   const { user } = useAuth();
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
+  const [ttsState, setTtsState] = useState<"idle" | "loading" | "playing">("idle");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const lines = piece.text.split("\n");
   const long = lines.length > 12 || piece.text.length > 600;
@@ -41,14 +48,35 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const speak = () => {
-    if (!("speechSynthesis" in window)) { toast.error("Озвучка не поддерживается"); return; }
-    if (speaking) { window.speechSynthesis.cancel(); setSpeaking(false); return; }
-    const u = new SpeechSynthesisUtterance(piece.text);
-    u.lang = "ru-RU"; u.rate = 0.85; u.pitch = 1;
-    u.onend = () => setSpeaking(false);
-    setSpeaking(true);
-    window.speechSynthesis.speak(u);
+  const speak = async () => {
+    if (ttsState === "playing" && audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      setTtsState("idle");
+      return;
+    }
+    if (ttsState === "loading") return;
+
+    setTtsState("loading");
+    try {
+      const language = detectLang(piece.text);
+      const { data, error } = await supabase.functions.invoke("tts-speak", {
+        body: { text: piece.text.slice(0, 2800), language },
+      });
+      if (error || !data?.audio) {
+        throw new Error(error?.message || "TTS failed");
+      }
+      const audio = new Audio(`data:${data.mime || "audio/mpeg"};base64,${data.audio}`);
+      audioRef.current = audio;
+      audio.onended = () => setTtsState("idle");
+      audio.onerror = () => { setTtsState("idle"); toast.error("Ошибка воспроизведения"); };
+      await audio.play();
+      setTtsState("playing");
+    } catch (e) {
+      console.error(e);
+      toast.error("Не удалось озвучить");
+      setTtsState("idle");
+    }
   };
 
   const save = async () => {
@@ -123,9 +151,15 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
           <Heart className={`h-3.5 w-3.5 mr-1.5 ${saved ? "fill-destructive stroke-destructive" : ""}`} />
           {saved ? "Сохранено" : "В избранное"}
         </Button>
-        <Button size="sm" variant="ghost" onClick={speak} className="rounded-full text-xs h-8">
-          <Volume2 className={`h-3.5 w-3.5 mr-1.5 ${speaking ? "text-primary" : ""}`} />
-          {speaking ? "Стоп" : "Озвучить"}
+        <Button size="sm" variant="ghost" onClick={speak} disabled={ttsState === "loading"} className="rounded-full text-xs h-8">
+          {ttsState === "loading" ? (
+            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+          ) : ttsState === "playing" ? (
+            <Pause className="h-3.5 w-3.5 mr-1.5 text-primary" />
+          ) : (
+            <Volume2 className="h-3.5 w-3.5 mr-1.5" />
+          )}
+          {ttsState === "loading" ? "Готовим..." : ttsState === "playing" ? "Стоп" : "Озвучить"}
         </Button>
         <ShareMenu
           title={`${piece.author}${piece.title ? ` — «${piece.title}»` : ""}`}
