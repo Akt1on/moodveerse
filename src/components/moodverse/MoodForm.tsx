@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
-import { Sparkles, Plus, X } from "lucide-react";
+import { Sparkles, Plus, X, Users } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
 export const EMOTIONS = [
@@ -26,6 +26,7 @@ export type MoodInput = {
   intensity: number;
   context: string;
   language_pref?: "any" | "ru" | "hy" | "en";
+  mode?: "single" | "council";
 };
 
 export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => void; loading: boolean }) => {
@@ -35,6 +36,7 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
   const [intensity, setIntensity] = useState([6]);
   const [ctx, setCtx] = useState("—");
   const [lang, setLang] = useState<"any" | "ru" | "hy" | "en">("any");
+  const [mode, setMode] = useState<"single" | "council">("single");
 
   const toggle = (e: string) => setEmotions(p => p.includes(e) ? p.filter(x => x !== e) : [...p, e]);
   const addCustom = () => {
@@ -52,6 +54,7 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
       intensity: intensity[0],
       context: ctx === "—" ? "" : ctx,
       language_pref: lang,
+      mode,
     });
   };
 
@@ -134,6 +137,29 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
         </div>
       </div>
 
+      <div className="space-y-2">
+        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground/80 text-center">Режим отклика</p>
+        <div className="flex flex-wrap gap-1.5 justify-center">
+          <button type="button" onClick={() => setMode("single")}
+            className={`px-3.5 py-1.5 rounded-full text-xs border transition-soft inline-flex items-center gap-1.5 ${
+              mode === "single" ? "bg-accent text-accent-foreground border-accent" : "border-border/60 text-muted-foreground hover:text-foreground"
+            }`}>
+            <Sparkles className="h-3 w-3" /> Один куратор
+          </button>
+          <button type="button" onClick={() => setMode("council")}
+            className={`px-3.5 py-1.5 rounded-full text-xs border transition-soft inline-flex items-center gap-1.5 ${
+              mode === "council" ? "bg-accent text-accent-foreground border-accent" : "border-border/60 text-muted-foreground hover:text-foreground"
+            }`}>
+            <Users className="h-3 w-3" /> Совет 5 кураторов
+          </button>
+        </div>
+        {mode === "council" && (
+          <p className="text-[11px] text-muted-foreground/70 text-center italic font-serif">
+            🪶 Поэт · 🧭 Философ · 🌿 Целитель · 🎬 Кинокритик · ✨ Мистик
+          </p>
+        )}
+      </div>
+
       <div className="flex justify-center pt-2">
         <Button
           type="submit"
@@ -141,8 +167,8 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
           size="lg"
           className="rounded-full px-10 py-6 text-base font-serif italic bg-gradient-button text-primary-foreground shadow-glow hover:shadow-soft hover:scale-[1.02] transition-soft disabled:opacity-50 disabled:hover:scale-100"
         >
-          <Sparkles className="h-4 w-4 mr-2" />
-          {loading ? "Ищем резонанс..." : "Найти резонанс"}
+          {mode === "council" ? <Users className="h-4 w-4 mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
+          {loading ? (mode === "council" ? "Совет совещается..." : "Ищем резонанс...") : (mode === "council" ? "Созвать совет" : "Найти резонанс")}
         </Button>
       </div>
     </form>
