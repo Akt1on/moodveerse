@@ -15,3 +15,4 @@ Stack: Lovable Cloud + Lovable AI Gateway (google/gemini-2.5-pro). All external 
 - [Literary works knowledge base](mem://architecture/literary-works-table) — pgvector table schema and embedding pipeline
 - [Design system](mem://design/misty-blue) — Misty Blue tokens, typography, motion
 - [Personal memory agent](mem://features/personal-memory) — user_memory table + memory-agent edge function feeding find-resonance
+- [Council of 5 curators](mem://features/council-of-curators) — council-resonance edge function: Poet/Philosopher/Healer/Critic/Mystic vote in parallel

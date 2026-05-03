@@ -33,7 +33,8 @@ const Index = () => {
     setPieces(null);
     setLastInput(input);
     try {
-      const { data, error } = await supabase.functions.invoke("find-resonance", { body: input });
+      const fn = input.mode === "council" ? "council-resonance" : "find-resonance";
+      const { data, error } = await supabase.functions.invoke(fn, { body: input });
       if (error) {
         const msg = (error as any)?.context?.error || error.message;
         toast.error(msg || "Не удалось получить отклик");

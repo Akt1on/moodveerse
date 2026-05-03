@@ -15,6 +15,8 @@ export type Piece = {
   explanation: string;
   relevance_score: number;
   is_original?: boolean;
+  curator?: { key: string; label: string; emoji: string };
+  curator_votes?: { key: string; label: string; emoji: string }[];
 };
 
 const typeLabel: Record<Piece["source_type"], string> = {
@@ -74,6 +76,19 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
           <span className="px-2.5 py-1 rounded-full bg-accent/60 text-accent-foreground tracking-wide">{typeLabel[piece.source_type]}</span>
           {piece.is_original && (
             <span className="px-2.5 py-1 rounded-full bg-primary/10 text-primary tracking-wide">В духе автора</span>
+          )}
+          {piece.curator && (
+            <span
+              className="px-2.5 py-1 rounded-full bg-primary/10 text-primary tracking-wide"
+              title={piece.curator_votes && piece.curator_votes.length > 1
+                ? `Выбрали: ${piece.curator_votes.map(c => `${c.emoji} ${c.label}`).join(", ")}`
+                : `Куратор: ${piece.curator.label}`}
+            >
+              {piece.curator.emoji} {piece.curator.label}
+              {piece.curator_votes && piece.curator_votes.length > 1 && (
+                <span className="ml-1 opacity-70">×{piece.curator_votes.length}</span>
+              )}
+            </span>
           )}
         </div>
         <div className="flex items-center gap-1 text-xs text-primary/80">
