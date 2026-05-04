@@ -17,3 +17,4 @@ Stack: Lovable Cloud + Lovable AI Gateway (google/gemini-2.5-pro). All external 
 - [Personal memory agent](mem://features/personal-memory) — user_memory table + memory-agent edge function feeding find-resonance
 - [Council of 5 curators](mem://features/council-of-curators) — council-resonance edge function: Poet/Philosopher/Healer/Critic/Mystic vote in parallel
 - [Voice (TTS + Speech Input)](mem://features/voice) — ElevenLabs TTS via tts-speak edge function + Web Speech API dictation in MoodForm
+- [Daily Verse & Rituals](mem://features/daily-verse) — daily-verse edge function + DailyVerse widget on home, deterministic by date+part-of-day
