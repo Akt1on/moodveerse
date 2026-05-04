@@ -4,6 +4,7 @@ import { AuroraBackground } from "@/components/moodverse/AuroraBackground";
 import { MoodForm, MoodInput } from "@/components/moodverse/MoodForm";
 import { Loading } from "@/components/moodverse/Loading";
 import { PieceCard, Piece } from "@/components/moodverse/PieceCard";
+import { DailyVerse } from "@/components/moodverse/DailyVerse";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
@@ -18,7 +19,7 @@ const Index = () => {
 
   // One-time silent seeding of the literary knowledge base.
   useEffect(() => {
-    const KEY = "moodverse_seeded_v4_bible";
+    const KEY = "moodverse_seeded_v5_en_hy";
     if (localStorage.getItem(KEY)) return;
     supabase.functions.invoke("seed-library", { body: {} })
       .then(({ data, error }) => {
@@ -77,6 +78,8 @@ const Index = () => {
             </p>
           </section>
         )}
+
+        {!pieces && !loading && <DailyVerse />}
 
         {loading && <Loading />}
 
