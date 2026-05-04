@@ -4,6 +4,7 @@ import { AuroraBackground } from "@/components/moodverse/AuroraBackground";
 import { MoodForm, MoodInput } from "@/components/moodverse/MoodForm";
 import { Loading } from "@/components/moodverse/Loading";
 import { PieceCard, Piece } from "@/components/moodverse/PieceCard";
+import { DailyVerse } from "@/components/moodverse/DailyVerse";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
@@ -77,6 +78,8 @@ const Index = () => {
             </p>
           </section>
         )}
+
+        {!pieces && !loading && <DailyVerse />}
 
         {loading && <Loading />}
 
