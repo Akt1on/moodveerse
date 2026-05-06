@@ -144,6 +144,18 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
         )}
       </div>
 
+      <div className="flex justify-center pt-1">
+        <Button
+          type="submit"
+          disabled={loading || text.trim().length < 3}
+          size="lg"
+          className="rounded-full px-10 py-6 text-base font-serif italic bg-gradient-button text-primary-foreground shadow-glow hover:shadow-soft hover:scale-[1.02] transition-soft disabled:opacity-50 disabled:hover:scale-100"
+        >
+          {mode === "council" ? <Users className="h-4 w-4 mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
+          {loading ? (mode === "council" ? "Совет совещается..." : "Ищем резонанс...") : (mode === "council" ? "Созвать совет" : "Найти резонанс")}
+        </Button>
+      </div>
+
       <div className="space-y-3">
         <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground/80 text-center">Эмоции (по желанию)</p>
         <div className="flex flex-wrap gap-2 justify-center">
@@ -229,18 +241,6 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
             🪶 Поэт · 🧭 Философ · 🌿 Целитель · 🎬 Кинокритик · ✨ Мистик
           </p>
         )}
-      </div>
-
-      <div className="flex justify-center pt-2">
-        <Button
-          type="submit"
-          disabled={loading || text.trim().length < 3}
-          size="lg"
-          className="rounded-full px-10 py-6 text-base font-serif italic bg-gradient-button text-primary-foreground shadow-glow hover:shadow-soft hover:scale-[1.02] transition-soft disabled:opacity-50 disabled:hover:scale-100"
-        >
-          {mode === "council" ? <Users className="h-4 w-4 mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
-          {loading ? (mode === "council" ? "Совет совещается..." : "Ищем резонанс...") : (mode === "council" ? "Созвать совет" : "Найти резонанс")}
-        </Button>
       </div>
     </form>
   );
