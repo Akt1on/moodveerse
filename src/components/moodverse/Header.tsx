@@ -27,7 +27,7 @@ export const Header = () => {
             className="h-8 w-8 transition-soft group-hover:scale-105"
             decoding="async"
           />
-          <span className="font-serif text-xl sm:text-2xl italic tracking-wide">MoodVerse</span>
+          <span className="font-serif text-xl sm:text-2xl italic tracking-wide">Я раньше здесь бывал...</span>
         </Link>
         <nav className="hidden md:flex items-center gap-1">
           {link("/", "Резонанс")}
