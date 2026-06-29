@@ -69,7 +69,7 @@ const Index = () => {
       <main className="container max-w-3xl py-10 sm:py-16">
         {!pieces && !loading && (
           <section className="text-center mb-10 animate-fade-up">
-            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground/80 mb-4">· MoodVerse ·</p>
+            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground/80 mb-4">· Я раньше здесь бывал ·</p>
             <h1 className="text-4xl sm:text-6xl mb-4 italic text-balance leading-tight">
               Тишина,<br />что говорит
             </h1>

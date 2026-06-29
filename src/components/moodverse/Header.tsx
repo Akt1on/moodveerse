@@ -18,10 +18,10 @@ export const Header = () => {
   return (
     <header className="sticky top-0 z-30 backdrop-blur-xl bg-background/40 border-b border-border/40">
       <div className="container max-w-6xl flex items-center justify-between py-3">
-        <Link to="/" className="flex items-center gap-2 group" aria-label="MoodVerse — на главную">
+        <Link to="/" className="flex items-center gap-2 group" aria-label="Я раньше здесь бывал — на главную">
           <img
             src={logo}
-            alt="MoodVerse"
+            alt="Я раньше здесь бывал"
             width={32}
             height={32}
             className="h-8 w-8 transition-soft group-hover:scale-105"
