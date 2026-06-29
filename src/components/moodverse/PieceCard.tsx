@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Heart, Volume2, Copy, Check, ChevronDown, Star, Loader2, Pause } from "lucide-react";
+import { Heart, Volume2, Copy, Check, ChevronDown, Star, Loader2, Pause, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -35,6 +35,8 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
   const [ttsState, setTtsState] = useState<"idle" | "loading" | "playing">("idle");
+  const [similar, setSimilar] = useState<Piece[] | null>(null);
+  const [simLoading, setSimLoading] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const lines = piece.text.split("\n");
@@ -92,6 +94,31 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
     });
     if (error) toast.error("Не удалось сохранить");
     else { setSaved(true); toast.success("В Избранном"); }
+  };
+
+  const findSimilar = async () => {
+    if (similar) { setSimilar(null); return; }
+    setSimLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("similar-resonance", {
+        body: {
+          text: piece.text,
+          author: piece.author,
+          title: piece.title,
+          source_type: piece.source_type,
+          language_pref: detectLang(piece.text),
+        },
+      });
+      if (error) throw error;
+      const list = (data?.pieces ?? []) as Piece[];
+      if (!list.length) toast.info("Похожего пока не нашлось");
+      setSimilar(list);
+    } catch (e: any) {
+      console.error(e);
+      toast.error("Не удалось подобрать похожее");
+    } finally {
+      setSimLoading(false);
+    }
   };
 
   return (
@@ -169,7 +196,33 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
           {copied ? <Check className="h-3.5 w-3.5 mr-1.5" /> : <Copy className="h-3.5 w-3.5 mr-1.5" />}
           Копировать
         </Button>
+        <Button size="sm" variant="ghost" onClick={findSimilar} disabled={simLoading} className="rounded-full text-xs h-8">
+          {simLoading ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
+          {similar ? "Скрыть похожее" : "Похожее настроение"}
+        </Button>
       </div>
+
+      {similar && similar.length > 0 && (
+        <div className="mt-6 pt-5 border-t border-border/40 space-y-4 animate-fade-up">
+          <p className="text-[11px] uppercase tracking-[0.25em] text-muted-foreground/80 text-center">
+            · В том же ключе ·
+          </p>
+          {similar.map((s, i) => (
+            <div key={i} className="rounded-2xl bg-card/40 border border-border/40 p-4 backdrop-blur-sm">
+              <pre className="whitespace-pre-wrap font-serif text-sm leading-relaxed text-foreground/85 italic line-clamp-[12]">
+                {s.text.length > 420 ? s.text.slice(0, 420).trimEnd() + "…" : s.text}
+              </pre>
+              <p className="mt-3 font-serif text-xs text-muted-foreground">
+                — <span className="text-foreground/80">{s.author}</span>
+                {s.title && <>, <em>«{s.title}»</em></>}
+              </p>
+              {s.explanation && (
+                <p className="mt-2 text-xs text-muted-foreground italic font-serif">{s.explanation}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </article>
   );
 };
