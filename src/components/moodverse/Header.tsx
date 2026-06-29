@@ -3,6 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { BookHeart, LogOut, User as UserIcon } from "lucide-react";
 import logo from "@/assets/moodverse-logo.png";
+import { ThemeSwitcher } from "./ThemeSwitcher";
 
 export const Header = () => {
   const { user, signOut } = useAuth();
@@ -36,6 +37,7 @@ export const Header = () => {
           {user && link("/favorites", "Избранное")}
         </nav>
         <div className="flex items-center gap-2">
+          <ThemeSwitcher />
           {user ? (
             <>
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-secondary/50 text-xs">

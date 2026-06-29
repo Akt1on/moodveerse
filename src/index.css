@@ -172,3 +172,64 @@ All colors MUST be HSL.
 .animate-float-slow { animation: float-slow 8s ease-in-out infinite; }
 .animate-shimmer { animation: shimmer 3s ease-in-out infinite; }
 .animate-fade-up { animation: fade-up 0.6s cubic-bezier(0.4, 0, 0.2, 1) both; }
+
+/* ===== Themes ===== */
+/* Mist is the default :root (no override needed). */
+
+/* Sepia — warm paper, aged ink */
+.theme-sepia {
+  --background: 38 45% 94%;
+  --foreground: 28 35% 22%;
+  --card: 38 50% 97%;
+  --card-foreground: 28 35% 22%;
+  --popover: 38 50% 97%;
+  --popover-foreground: 28 35% 22%;
+  --primary: 24 50% 38%;
+  --primary-foreground: 38 50% 97%;
+  --secondary: 34 35% 86%;
+  --secondary-foreground: 28 35% 22%;
+  --muted: 34 30% 88%;
+  --muted-foreground: 28 18% 42%;
+  --accent: 32 45% 82%;
+  --accent-foreground: 28 35% 22%;
+  --border: 30 25% 80%;
+  --input: 30 25% 84%;
+  --ring: 24 50% 38%;
+  --gradient-sky: linear-gradient(160deg, hsl(38 50% 96%) 0%, hsl(34 40% 88%) 50%, hsl(30 35% 78%) 100%);
+  --gradient-card: linear-gradient(135deg, hsl(38 50% 98% / 0.85), hsl(34 40% 92% / 0.6));
+  --gradient-button: linear-gradient(90deg, hsl(24 50% 42%), hsl(32 55% 55%));
+  --gradient-aurora: radial-gradient(ellipse at top, hsl(34 60% 80% / 0.5), transparent 60%), radial-gradient(ellipse at bottom right, hsl(24 50% 75% / 0.4), transparent 60%);
+  --shadow-soft: 0 8px 32px -12px hsl(28 40% 30% / 0.2);
+  --shadow-glow: 0 0 60px hsl(34 60% 70% / 0.4);
+  --shadow-card: 0 4px 24px -8px hsl(28 30% 25% / 0.14);
+}
+
+/* Forest — moss & sage */
+.theme-forest {
+  --background: 130 18% 94%;
+  --foreground: 150 25% 18%;
+  --card: 130 25% 98%;
+  --card-foreground: 150 25% 18%;
+  --popover: 130 25% 98%;
+  --popover-foreground: 150 25% 18%;
+  --primary: 150 30% 35%;
+  --primary-foreground: 130 25% 98%;
+  --secondary: 130 18% 88%;
+  --secondary-foreground: 150 25% 18%;
+  --muted: 130 18% 90%;
+  --muted-foreground: 150 12% 40%;
+  --accent: 140 25% 84%;
+  --accent-foreground: 150 25% 18%;
+  --border: 135 18% 80%;
+  --input: 135 18% 84%;
+  --ring: 150 30% 35%;
+  --gradient-sky: linear-gradient(160deg, hsl(130 25% 96%) 0%, hsl(140 22% 86%) 50%, hsl(150 25% 76%) 100%);
+  --gradient-card: linear-gradient(135deg, hsl(130 30% 98% / 0.85), hsl(140 22% 92% / 0.6));
+  --gradient-button: linear-gradient(90deg, hsl(150 32% 38%), hsl(140 32% 52%));
+  --gradient-aurora: radial-gradient(ellipse at top, hsl(140 45% 78% / 0.45), transparent 60%), radial-gradient(ellipse at bottom right, hsl(120 40% 75% / 0.35), transparent 60%);
+  --shadow-soft: 0 8px 32px -12px hsl(150 35% 25% / 0.2);
+  --shadow-glow: 0 0 60px hsl(140 50% 65% / 0.35);
+  --shadow-card: 0 4px 24px -8px hsl(150 30% 20% / 0.14);
+}
+
+/* Midnight = uses the existing .dark token block automatically (we toggle .dark together). */
