@@ -5,6 +5,7 @@ import { Slider } from "@/components/ui/slider";
 import { Sparkles, Plus, X, Users, Mic, MicOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
+import { useLocale } from "@/contexts/LocaleContext";
 
 export const EMOTIONS = [
   "Грусть", "Меланхолия", "Одиночество", "Тревога", "Гнев", "Радость",
@@ -31,6 +32,7 @@ export type MoodInput = {
 };
 
 export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => void; loading: boolean }) => {
+  const { t } = useLocale();
   const [text, setText] = useState("");
   const [emotions, setEmotions] = useState<string[]>([]);
   const [custom, setCustom] = useState("");
@@ -121,7 +123,7 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
         <Textarea
           value={text}
           onChange={e => setText(e.target.value)}
-          placeholder="Опишите, что вы чувствуете прямо сейчас... Какие эмоции, мысли, ощущения? (грусть, одиночество, тревога, надежда, гнев, радость и т.д.)"
+          placeholder={t("form.placeholder")}
           maxLength={2000}
           className="min-h-[160px] resize-none rounded-2xl bg-card/60 backdrop-blur-md border-border/60 px-6 py-5 text-base font-serif italic placeholder:text-muted-foreground/60 placeholder:italic shadow-card focus-visible:ring-primary/40"
         />
@@ -152,12 +154,14 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
           className="rounded-full px-10 py-6 text-base font-serif italic bg-gradient-button text-primary-foreground shadow-glow hover:shadow-soft hover:scale-[1.02] transition-soft disabled:opacity-50 disabled:hover:scale-100"
         >
           {mode === "council" ? <Users className="h-4 w-4 mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
-          {loading ? (mode === "council" ? "Совет совещается..." : "Ищем резонанс...") : (mode === "council" ? "Созвать совет" : "Найти резонанс")}
+          {loading
+            ? (mode === "council" ? t("form.loading.council") : t("form.loading.single"))
+            : (mode === "council" ? t("form.submit.council") : t("form.submit.single"))}
         </Button>
       </div>
 
       <div className="space-y-3">
-        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground/80 text-center">Эмоции (по желанию)</p>
+        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground/80 text-center">{t("form.emotions")}</p>
         <div className="flex flex-wrap gap-2 justify-center">
           {[...EMOTIONS, ...emotions.filter(e => !EMOTIONS.includes(e))].map(e => {
             const on = emotions.includes(e);
@@ -178,7 +182,7 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
             value={custom}
             onChange={e => setCustom(e.target.value)}
             onKeyDown={e => e.key === "Enter" && (e.preventDefault(), addCustom())}
-            placeholder="Своя эмоция..."
+            placeholder={t("form.customEmotion")}
             maxLength={30}
             className="rounded-full bg-card/40 border-border/60 text-sm h-9"
           />
@@ -191,12 +195,12 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
       <div className="grid sm:grid-cols-2 gap-6">
         <div className="space-y-2">
           <div className="flex justify-between text-xs uppercase tracking-[0.2em] text-muted-foreground/80">
-            <span>Интенсивность</span><span className="text-primary">{intensity[0]} / 10</span>
+            <span>{t("form.intensity")}</span><span className="text-primary">{intensity[0]} / 10</span>
           </div>
           <Slider value={intensity} onValueChange={setIntensity} min={1} max={10} step={1} />
         </div>
         <div className="space-y-2">
-          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground/80">Контекст</p>
+          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground/80">{t("form.context")}</p>
           <div className="flex flex-wrap gap-1.5">
             {CONTEXTS.map(c => (
               <button type="button" key={c} onClick={() => setCtx(c)}
@@ -209,7 +213,7 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
       </div>
 
       <div className="space-y-2">
-        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground/80 text-center">Язык произведений</p>
+        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground/80 text-center">{t("form.language")}</p>
         <div className="flex flex-wrap gap-1.5 justify-center">
           {LANGUAGES.map(l => (
             <button type="button" key={l.value} onClick={() => setLang(l.value)}
@@ -221,19 +225,19 @@ export const MoodForm = ({ onSubmit, loading }: { onSubmit: (m: MoodInput) => vo
       </div>
 
       <div className="space-y-2">
-        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground/80 text-center">Режим отклика</p>
+        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground/80 text-center">{t("form.mode")}</p>
         <div className="flex flex-wrap gap-1.5 justify-center">
           <button type="button" onClick={() => setMode("single")}
             className={`px-3.5 py-1.5 rounded-full text-xs border transition-soft inline-flex items-center gap-1.5 ${
               mode === "single" ? "bg-accent text-accent-foreground border-accent" : "border-border/60 text-muted-foreground hover:text-foreground"
             }`}>
-            <Sparkles className="h-3 w-3" /> Один куратор
+            <Sparkles className="h-3 w-3" /> {t("form.mode.single")}
           </button>
           <button type="button" onClick={() => setMode("council")}
             className={`px-3.5 py-1.5 rounded-full text-xs border transition-soft inline-flex items-center gap-1.5 ${
               mode === "council" ? "bg-accent text-accent-foreground border-accent" : "border-border/60 text-muted-foreground hover:text-foreground"
             }`}>
-            <Users className="h-3 w-3" /> Совет 5 кураторов
+            <Users className="h-3 w-3" /> {t("form.mode.council")}
           </button>
         </div>
         {mode === "council" && (
