@@ -4,10 +4,13 @@ import { Button } from "@/components/ui/button";
 import { BookHeart, LogOut, User as UserIcon } from "lucide-react";
 import logo from "@/assets/moodverse-logo.png";
 import { ThemeSwitcher } from "./ThemeSwitcher";
+import { LocaleSwitcher } from "./LocaleSwitcher";
+import { useLocale } from "@/contexts/LocaleContext";
 
 export const Header = () => {
   const { user, signOut } = useAuth();
   const loc = useLocation();
+  const { t } = useLocale();
   const link = (to: string, label: string) => (
     <Link to={to}
       className={`px-3 py-1.5 rounded-full text-sm transition-soft ${
@@ -31,12 +34,13 @@ export const Header = () => {
           <span className="font-serif text-xl sm:text-2xl italic tracking-wide">Я раньше здесь бывал...</span>
         </Link>
         <nav className="hidden md:flex items-center gap-1">
-          {link("/", "Резонанс")}
-          {user && link("/journal", "Журнал")}
-          {user && link("/journey", "Путь")}
-          {user && link("/favorites", "Избранное")}
+          {link("/", t("nav.resonance"))}
+          {user && link("/journal", t("nav.journal"))}
+          {user && link("/journey", t("nav.journey"))}
+          {user && link("/favorites", t("nav.favorites"))}
         </nav>
         <div className="flex items-center gap-2">
+          <LocaleSwitcher />
           <ThemeSwitcher />
           {user ? (
             <>
@@ -44,23 +48,23 @@ export const Header = () => {
                 <UserIcon className="h-3 w-3" />
                 <span className="truncate max-w-[120px]">{user.email}</span>
               </div>
-              <Button variant="ghost" size="icon" onClick={signOut} title="Выйти">
+              <Button variant="ghost" size="icon" onClick={signOut} title={t("nav.logout")}>
                 <LogOut className="h-4 w-4" />
               </Button>
             </>
           ) : (
             <Button asChild variant="outline" size="sm" className="rounded-full">
-              <Link to="/auth"><BookHeart className="h-3.5 w-3.5 mr-1.5" />Войти</Link>
+              <Link to="/auth"><BookHeart className="h-3.5 w-3.5 mr-1.5" />{t("nav.login")}</Link>
             </Button>
           )}
         </div>
       </div>
       {user && (
         <nav className="md:hidden flex items-center justify-center gap-1 pb-2">
-          {link("/", "Резонанс")}
-          {link("/journal", "Журнал")}
-          {link("/journey", "Путь")}
-          {link("/favorites", "Избранное")}
+          {link("/", t("nav.resonance"))}
+          {link("/journal", t("nav.journal"))}
+          {link("/journey", t("nav.journey"))}
+          {link("/favorites", t("nav.favorites"))}
         </nav>
       )}
     </header>

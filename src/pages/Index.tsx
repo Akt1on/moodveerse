@@ -5,6 +5,8 @@ import { MoodForm, MoodInput } from "@/components/moodverse/MoodForm";
 import { Loading } from "@/components/moodverse/Loading";
 import { PieceCard, Piece } from "@/components/moodverse/PieceCard";
 import { DailyVerse } from "@/components/moodverse/DailyVerse";
+import { DailyReminder } from "@/components/moodverse/DailyReminder";
+import { useLocale } from "@/contexts/LocaleContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
@@ -13,6 +15,7 @@ import { ArrowLeft } from "lucide-react";
 
 const Index = () => {
   const { user } = useAuth();
+  const { t } = useLocale();
   const [loading, setLoading] = useState(false);
   const [pieces, setPieces] = useState<Piece[] | null>(null);
   const [lastInput, setLastInput] = useState<MoodInput | null>(null);
@@ -69,13 +72,16 @@ const Index = () => {
       <main className="container max-w-3xl py-10 sm:py-16">
         {!pieces && !loading && (
           <section className="text-center mb-10 animate-fade-up">
-            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground/80 mb-4">· Я раньше здесь бывал ·</p>
+            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground/80 mb-4">· {t("hero.overline")} ·</p>
             <h1 className="text-4xl sm:text-6xl mb-4 italic text-balance leading-tight">
-              Тишина,<br />что говорит
+              {t("hero.title1")}<br />{t("hero.title2")}
             </h1>
             <p className="text-muted-foreground font-serif italic text-lg max-w-md mx-auto text-balance">
-              Опишите чувство — и поэзия откликнется именно так, как нужно сейчас.
+              {t("hero.sub")}
             </p>
+            <div className="mt-5 flex justify-center">
+              <DailyReminder />
+            </div>
           </section>
         )}
 
@@ -89,9 +95,9 @@ const Index = () => {
           <section>
             <div className="flex items-center justify-between mb-6 animate-fade-up">
               <Button variant="ghost" size="sm" onClick={() => { setPieces(null); setLastInput(null); }} className="rounded-full">
-                <ArrowLeft className="h-3.5 w-3.5 mr-1.5" /> Новый запрос
+                <ArrowLeft className="h-3.5 w-3.5 mr-1.5" /> {t("results.new")}
               </Button>
-              <p className="text-xs text-muted-foreground italic">Найдено {pieces.length} откликов</p>
+              <p className="text-xs text-muted-foreground italic">{t("results.count", { n: pieces.length })}</p>
             </div>
             {lastInput && (
               <blockquote className="mb-8 px-5 py-4 rounded-2xl bg-card/40 backdrop-blur-sm border-l-2 border-primary/60 italic font-serif text-foreground/70 animate-fade-up">
@@ -104,7 +110,7 @@ const Index = () => {
             {!user && (
               <div className="mt-10 p-6 rounded-2xl bg-card/40 backdrop-blur-sm border border-border/60 text-center animate-fade-up">
                 <p className="font-serif italic text-foreground/80">
-                  Войдите, чтобы сохранять отзывы и видеть журнал своих состояний
+                  {t("results.signInPrompt")}
                 </p>
               </div>
             )}
@@ -112,7 +118,7 @@ const Index = () => {
         )}
       </main>
       <footer className="container max-w-6xl pb-10 pt-4 text-center text-xs text-muted-foreground/60">
-        <p className="font-serif italic">Слова, которые помнят то, что мы забыли о себе</p>
+        <p className="font-serif italic">{t("footer.line")}</p>
       </footer>
     </>
   );

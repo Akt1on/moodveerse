@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Sun, Sunrise, Sunset, Moon, Sparkles } from "lucide-react";
+import { useLocale } from "@/contexts/LocaleContext";
 
 type Part = "morning" | "day" | "evening" | "night";
 
@@ -26,18 +27,20 @@ const ICONS: Record<Part, JSX.Element> = {
   night:   <Moon className="h-3.5 w-3.5" />,
 };
 
-const CACHE_KEY = "moodverse_daily_v1";
+const CACHE_KEY = "moodverse_daily_v2";
 
 export const DailyVerse = () => {
+  const { locale } = useLocale();
   const [data, setData] = useState<DailyResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const tz = -new Date().getTimezoneOffset(); // minutes east of UTC
     const today = new Date().toISOString().slice(0, 10);
+    const cacheKey = `${CACHE_KEY}_${locale}`;
 
     try {
-      const cached = localStorage.getItem(CACHE_KEY);
+      const cached = localStorage.getItem(cacheKey);
       if (cached) {
         const parsed = JSON.parse(cached) as { date: string; part: Part; payload: DailyResponse };
         if (parsed.date === today) {
@@ -56,13 +59,8 @@ export const DailyVerse = () => {
       }
     } catch {}
 
-    supabase.functions
-      .invoke("daily-verse", { body: null, method: "GET" } as any)
-      // .invoke doesn't pass query params reliably for GET; fall back to fetch.
-      .catch(() => null)
-      .finally(() => {});
-
-    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/daily-verse?lang=ru&tz=${tz}`;
+    setLoading(true);
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/daily-verse?lang=${locale}&tz=${tz}`;
     fetch(url, {
       headers: { apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY },
     })
@@ -72,7 +70,7 @@ export const DailyVerse = () => {
           setData(payload);
           try {
             localStorage.setItem(
-              CACHE_KEY,
+              cacheKey,
               JSON.stringify({ date: payload.date, part: payload.part, payload }),
             );
           } catch {}
@@ -80,7 +78,7 @@ export const DailyVerse = () => {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }, [locale]);
 
   if (loading) {
     return (
