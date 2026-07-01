@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { LocaleProvider } from "@/contexts/LocaleContext";
 import Index from "./pages/Index.tsx"; // keep eager — landing page
 const Auth = lazy(() => import("./pages/Auth.tsx"));
 const Journal = lazy(() => import("./pages/Journal.tsx"));
@@ -21,7 +22,8 @@ const queryClient = new QueryClient({
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <ThemeProvider>
+    <LocaleProvider>
+     <ThemeProvider>
       <TooltipProvider>
       <Toaster />
       <Sonner />
@@ -40,7 +42,8 @@ const App = () => (
         </AuthProvider>
       </BrowserRouter>
       </TooltipProvider>
-    </ThemeProvider>
+     </ThemeProvider>
+    </LocaleProvider>
   </QueryClientProvider>
 );
 
