@@ -28,8 +28,21 @@ type Candidate = {
   year?: number | null;
   language?: string;
   score?: number;
-  origin: "lexical" | "random";
+  origin: "lexical" | "vector" | "hybrid" | "random";
 };
+
+async function embedQuery(text: string, apiKey: string): Promise<number[] | null> {
+  try {
+    const r = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "openai/text-embedding-3-small", input: text.slice(0, 4000) }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j.data?.[0]?.embedding ?? null;
+  } catch { return null; }
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -71,48 +84,83 @@ serve(async (req) => {
     const lowerEmotions = emotions.map((e: string) => e.toLowerCase());
     const queryText = [input_text, ...emotions, context].filter(Boolean).join(" ");
 
-    // Lexical RPC + a small random batch in parallel for diversity.
-    const [lexResp, randResp] = await Promise.all([
+    // Hybrid retrieval: embed query, then run vector + lexical + random in parallel.
+    const queryEmbedding = await embedQuery(queryText, LOVABLE_API_KEY);
+
+    const [vecResp, lexResp, randResp] = await Promise.all([
+      queryEmbedding
+        ? supabase.rpc("match_literary_works", {
+            query_embedding: queryEmbedding as any,
+            match_count: 20,
+            filter_language: lang,
+            filter_emotions: lowerEmotions.length ? lowerEmotions : null,
+            similarity_threshold: 0.0,
+          })
+        : Promise.resolve({ data: null, error: null } as any),
       supabase.rpc("match_literary_lexical", {
         query_text: queryText,
         query_emotions: lowerEmotions.length ? lowerEmotions : null,
         preferred_language: lang,
-        match_count: 28,
+        match_count: 20,
       }),
-      supabase
-        .from("literary_works")
-        .select("id,text,author,title,source_type,year,language")
-        .limit(8),
+      supabase.from("literary_works").select("id,text,author,title,source_type,year,language").limit(8),
     ]);
 
     const candidates: Candidate[] = [];
-    const seen = new Set<string>();
+    const seen = new Map<string, Candidate>();
+
+    // Vector hits first — highest-quality signal
+    if (vecResp?.data && Array.isArray(vecResp.data)) {
+      for (const d of vecResp.data as any[]) {
+        if (seen.has(d.id)) continue;
+        const c: Candidate = {
+          id: d.id, text: d.text, author: d.author, title: d.title,
+          source_type: d.source_type, year: d.year, language: d.language,
+          score: d.similarity ?? d.score, origin: "vector",
+        };
+        seen.set(d.id, c);
+        candidates.push(c);
+      }
+    } else if (vecResp?.error) {
+      console.error("vector rpc error", vecResp.error);
+    }
 
     if (lexResp.data && Array.isArray(lexResp.data)) {
-      for (const d of lexResp.data) {
-        if (seen.has(d.id)) continue;
-        seen.add(d.id);
-        candidates.push({
+      for (const d of lexResp.data as any[]) {
+        const existing = seen.get(d.id);
+        if (existing) {
+          // Intersection: piece found by both vector + lexical is a strong signal
+          existing.origin = "hybrid";
+          existing.score = (existing.score ?? 0) + (d.score ?? 0) * 0.5 + 0.15;
+          continue;
+        }
+        const c: Candidate = {
           id: d.id, text: d.text, author: d.author, title: d.title,
           source_type: d.source_type, year: d.year, language: d.language,
           score: d.score, origin: "lexical",
-        });
+        };
+        seen.set(d.id, c);
+        candidates.push(c);
       }
     } else if (lexResp.error) {
-      console.error("rpc error", lexResp.error);
+      console.error("lexical rpc error", lexResp.error);
     }
 
     if (randResp.data && Array.isArray(randResp.data)) {
-      for (const d of randResp.data) {
+      for (const d of randResp.data as any[]) {
         if (seen.has(d.id)) continue;
-        seen.add(d.id);
-        candidates.push({
+        const c: Candidate = {
           id: d.id, text: d.text, author: d.author, title: d.title,
           source_type: d.source_type, year: d.year, language: d.language,
           origin: "random",
-        });
+        };
+        seen.set(d.id, c);
+        candidates.push(c);
       }
     }
+
+    // Rank by score (hybrid gets bonus baked in), then trim
+    candidates.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
     if (candidates.length === 0) {
       return new Response(JSON.stringify({
@@ -218,8 +266,11 @@ ${JSON.stringify(candidatesPayload)}`;
       pieces: args.pieces || [],
       meta: {
         candidates_total: candidates.length,
+        from_vector: candidates.filter(c => c.origin === "vector").length,
         from_lexical: candidates.filter(c => c.origin === "lexical").length,
+        from_hybrid: candidates.filter(c => c.origin === "hybrid").length,
         from_random: candidates.filter(c => c.origin === "random").length,
+        embedded_query: !!queryEmbedding,
         language_pref: language_pref || null,
         used_memory: !!userMemory,
       },
