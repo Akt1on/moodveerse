@@ -6,25 +6,35 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-async function embed(text: string, apiKey: string, retries = 2): Promise<number[] | null> {
+async function embed(text: string, apiKey: string, retries = 3): Promise<number[] | null> {
+  let lastErr = "";
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const r = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "openai/text-embedding-3-small", input: text.slice(0, 8000) }),
+        body: JSON.stringify({ model: "openai/text-embedding-3-small", input: text.slice(0, 6000) }),
       });
       if (r.status === 429 || r.status >= 500) {
-        await new Promise((res) => setTimeout(res, 800 * (attempt + 1)));
+        lastErr = `status ${r.status}`;
+        await new Promise((res) => setTimeout(res, 1200 * (attempt + 1)));
         continue;
       }
-      if (!r.ok) return null;
+      if (!r.ok) {
+        const body = await r.text();
+        console.error("embed non-ok:", r.status, body.slice(0, 200));
+        return null;
+      }
       const j = await r.json();
-      return j.data?.[0]?.embedding ?? null;
-    } catch {
-      await new Promise((res) => setTimeout(res, 800 * (attempt + 1)));
+      const vec = j.data?.[0]?.embedding;
+      if (!vec) { console.error("embed no data:", JSON.stringify(j).slice(0, 200)); return null; }
+      return vec;
+    } catch (e) {
+      lastErr = String(e);
+      await new Promise((res) => setTimeout(res, 1200 * (attempt + 1)));
     }
   }
+  console.error("embed exhausted retries:", lastErr);
   return null;
 }
 
