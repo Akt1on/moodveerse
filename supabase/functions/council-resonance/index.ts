@@ -56,8 +56,22 @@ type Candidate = {
   source_type: string;
   year?: number | null;
   language?: string;
-  origin: "lexical" | "random";
+  score?: number;
+  origin: "lexical" | "vector" | "hybrid" | "random";
 };
+
+async function embedQuery(text: string, apiKey: string): Promise<number[] | null> {
+  try {
+    const r = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "openai/text-embedding-3-small", input: text.slice(0, 4000) }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j.data?.[0]?.embedding ?? null;
+  } catch { return null; }
+}
 
 async function callCurator(
   key: CuratorKey,
@@ -160,29 +174,50 @@ serve(async (req) => {
     const lowerEmotions = emotions.map((e: string) => e.toLowerCase());
     const queryText = [input_text, ...emotions, context].filter(Boolean).join(" ");
 
-    // Wider candidate pool — 5 curators need diversity
-    const [lexResp, randResp] = await Promise.all([
+    // Hybrid retrieval — wider pool for 5 curators
+    const queryEmbedding = await embedQuery(queryText, LOVABLE_API_KEY);
+    const [vecResp, lexResp, randResp] = await Promise.all([
+      queryEmbedding
+        ? supabase.rpc("match_literary_works", {
+            query_embedding: queryEmbedding as any,
+            match_count: 24,
+            filter_language: lang,
+            filter_emotions: lowerEmotions.length ? lowerEmotions : null,
+            similarity_threshold: 0.0,
+          })
+        : Promise.resolve({ data: null, error: null } as any),
       supabase.rpc("match_literary_lexical", {
         query_text: queryText,
         query_emotions: lowerEmotions.length ? lowerEmotions : null,
         preferred_language: lang,
-        match_count: 36,
+        match_count: 24,
       }),
       supabase.from("literary_works").select("id,text,author,title,source_type,year,language").limit(12),
     ]);
 
     const candidates: Candidate[] = [];
-    const seen = new Set<string>();
-    for (const d of (lexResp.data as any[]) ?? []) {
+    const seen = new Map<string, Candidate>();
+    for (const d of (vecResp?.data as any[]) ?? []) {
       if (seen.has(d.id)) continue;
-      seen.add(d.id);
-      candidates.push({ id: d.id, text: d.text, author: d.author, title: d.title, source_type: d.source_type, year: d.year, language: d.language, origin: "lexical" });
+      const c: Candidate = { id: d.id, text: d.text, author: d.author, title: d.title, source_type: d.source_type, year: d.year, language: d.language, score: d.similarity ?? d.score, origin: "vector" };
+      seen.set(d.id, c); candidates.push(c);
+    }
+    for (const d of (lexResp.data as any[]) ?? []) {
+      const existing = seen.get(d.id);
+      if (existing) {
+        existing.origin = "hybrid";
+        existing.score = (existing.score ?? 0) + (d.score ?? 0) * 0.5 + 0.15;
+        continue;
+      }
+      const c: Candidate = { id: d.id, text: d.text, author: d.author, title: d.title, source_type: d.source_type, year: d.year, language: d.language, score: d.score, origin: "lexical" };
+      seen.set(d.id, c); candidates.push(c);
     }
     for (const d of (randResp.data as any[]) ?? []) {
       if (seen.has(d.id)) continue;
-      seen.add(d.id);
-      candidates.push({ id: d.id, text: d.text, author: d.author, title: d.title, source_type: d.source_type, year: d.year, language: d.language, origin: "random" });
+      const c: Candidate = { id: d.id, text: d.text, author: d.author, title: d.title, source_type: d.source_type, year: d.year, language: d.language, origin: "random" };
+      seen.set(d.id, c); candidates.push(c);
     }
+    candidates.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
     if (candidates.length === 0) {
       return new Response(JSON.stringify({ error: "Библиотека пуста. Подождите завершения первичной загрузки." }), {
@@ -266,6 +301,11 @@ ${userMemory ? `\nЭМОЦИОНАЛЬНЫЙ ПРОФИЛЬ (учти, не ци
       meta: {
         mode: "council",
         candidates_total: candidates.length,
+        from_vector: candidates.filter(c => c.origin === "vector").length,
+        from_lexical: candidates.filter(c => c.origin === "lexical").length,
+        from_hybrid: candidates.filter(c => c.origin === "hybrid").length,
+        from_random: candidates.filter(c => c.origin === "random").length,
+        embedded_query: !!queryEmbedding,
         curators_active: keys.length,
         used_memory: !!userMemory,
         language_pref: language_pref || null,

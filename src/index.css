@@ -173,6 +173,21 @@ All colors MUST be HSL.
 .animate-shimmer { animation: shimmer 3s ease-in-out infinite; }
 .animate-fade-up { animation: fade-up 0.6s cubic-bezier(0.4, 0, 0.2, 1) both; }
 
+/* Respect user's reduced-motion preference — pause heavy aurora blobs on mobile GPUs */
+@media (prefers-reduced-motion: reduce) {
+  .animate-float-slow,
+  .animate-shimmer,
+  .animate-fade-up {
+    animation: none !important;
+  }
+  .aurora-blob {
+    opacity: 0.2 !important;
+  }
+  * {
+    scroll-behavior: auto !important;
+  }
+}
+
 /* ===== Themes ===== */
 /* Mist is the default :root (no override needed). */
 

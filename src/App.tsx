@@ -1,4 +1,5 @@
 import { lazy, Suspense } from "react";
+import { ErrorBoundary } from "react-error-boundary";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
@@ -7,6 +8,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { LocaleProvider } from "@/contexts/LocaleContext";
+import { ErrorFallback } from "@/components/ErrorFallback";
 import Index from "./pages/Index.tsx"; // keep eager — landing page
 const Auth = lazy(() => import("./pages/Auth.tsx"));
 const Journal = lazy(() => import("./pages/Journal.tsx"));
@@ -30,14 +32,16 @@ const App = () => (
       <BrowserRouter>
         <AuthProvider>
           <Suspense fallback={null}>
-            <Routes>
-              <Route path="/" element={<Index />} />
-              <Route path="/auth" element={<Auth />} />
-              <Route path="/journal" element={<Journal />} />
-              <Route path="/favorites" element={<Favorites />} />
-              <Route path="/journey" element={<Journey />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
+            <ErrorBoundary FallbackComponent={ErrorFallback}>
+              <Routes>
+                <Route path="/" element={<Index />} />
+                <Route path="/auth" element={<Auth />} />
+                <Route path="/journal" element={<Journal />} />
+                <Route path="/favorites" element={<Favorites />} />
+                <Route path="/journey" element={<Journey />} />
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </ErrorBoundary>
           </Suspense>
         </AuthProvider>
       </BrowserRouter>
