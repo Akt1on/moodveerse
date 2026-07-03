@@ -13,12 +13,42 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+/** Batch-embed inputs via Lovable AI Gateway (OpenAI-compatible). */
+async function embedBatch(inputs: string[], apiKey: string, retries = 4): Promise<(number[] | null)[]> {
+  if (!inputs.length) return [];
+  const clean = inputs.map((t) => (t || " ").slice(0, 6000));
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const r = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "openai/text-embedding-3-small", input: clean }),
+      });
+      if (r.status === 429 || r.status >= 500) {
+        await new Promise((res) => setTimeout(res, 1500 * (attempt + 1)));
+        continue;
+      }
+      if (!r.ok) return inputs.map(() => null);
+      const j = await r.json();
+      const out: (number[] | null)[] = new Array(inputs.length).fill(null);
+      for (const item of (j.data ?? [])) {
+        if (typeof item.index === "number" && Array.isArray(item.embedding)) out[item.index] = item.embedding;
+      }
+      return out;
+    } catch {
+      await new Promise((res) => setTimeout(res, 1500 * (attempt + 1)));
+    }
+  }
+  return inputs.map(() => null);
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
     const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
     const ALL_SEED = [...SEED, ...SEED_HY, ...SEED_EXTRA, ...SEED_BIBLE, ...SEED_EN, ...SEED_HY_EXTRA, ...SEED_RU_EXTRA, ...SEED_HY_V2];
@@ -71,6 +101,20 @@ serve(async (req) => {
         failed += chunk.length;
       } else {
         inserted += data?.length ?? chunk.length;
+        // Embed the freshly inserted rows so semantic search works immediately.
+        if (LOVABLE_API_KEY && data?.length) {
+          const inputs = chunk.map((p) =>
+            `${p.title ?? ""}\n${p.author ?? ""}\n${p.text ?? ""}`.trim() || p.author || "text",
+          );
+          const vectors = await embedBatch(inputs, LOVABLE_API_KEY);
+          await Promise.all(
+            data.map((row: any, idx: number) => {
+              const vec = vectors[idx];
+              if (!vec) return Promise.resolve();
+              return supabase.from("literary_works").update({ embedding: vec as any }).eq("id", row.id);
+            }),
+          );
+        }
       }
     }
 
