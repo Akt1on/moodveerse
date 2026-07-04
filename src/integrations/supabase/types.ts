@@ -158,6 +158,27 @@ export type Database = {
         }
         Relationships: []
       }
+      rate_limits: {
+        Row: {
+          count: number
+          endpoint: string
+          identifier: string
+          window_start: string
+        }
+        Insert: {
+          count?: number
+          endpoint: string
+          identifier: string
+          window_start?: string
+        }
+        Update: {
+          count?: number
+          endpoint?: string
+          identifier?: string
+          window_start?: string
+        }
+        Relationships: []
+      }
       user_memory: {
         Row: {
           agent_notes: string | null
@@ -196,6 +217,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      check_rate_limit: {
+        Args: {
+          p_endpoint: string
+          p_identifier: string
+          p_max: number
+          p_window_seconds: number
+        }
+        Returns: boolean
+      }
       match_literary_lexical: {
         Args: {
           match_count?: number
