@@ -124,6 +124,98 @@ async function fetchGutendex(limit: number, languages: string[]): Promise<Piece[
   return pieces;
 }
 
+// ---------- Source: Wikisource (RU / HY / EN / etc.) ----------
+// Uses MediaWiki API: list=categorymembers + prop=extracts&explaintext.
+// Configurable per-language: which category to sample from.
+const WIKISOURCE_CATEGORIES: Record<string, string> = {
+  ru: "Категория:Стихотворения_по_алфавиту",
+  hy: "Կատեգորիա:Բանաստեղծություններ",
+  en: "Category:Poems",
+  fr: "Catégorie:Poèmes",
+};
+
+async function fetchWikisource(limit: number, languages: string[]): Promise<Piece[]> {
+  const pieces: Piece[] = [];
+  for (const lang of languages) {
+    const category = WIKISOURCE_CATEGORIES[lang];
+    if (!category) continue;
+    const perLangCap = limit;
+    let cmcontinue: string | null = null;
+    let pages = 0;
+    let takenThisLang = 0;
+    while (takenThisLang < perLangCap && pages < 8) {
+      pages++;
+      const listUrl = new URL(`https://${lang}.wikisource.org/w/api.php`);
+      listUrl.searchParams.set("action", "query");
+      listUrl.searchParams.set("list", "categorymembers");
+      listUrl.searchParams.set("cmtitle", category);
+      listUrl.searchParams.set("cmlimit", "50");
+      listUrl.searchParams.set("cmtype", "page");
+      listUrl.searchParams.set("format", "json");
+      listUrl.searchParams.set("origin", "*");
+      if (cmcontinue) listUrl.searchParams.set("cmcontinue", cmcontinue);
+      let listJson: any;
+      try {
+        const r = await fetch(listUrl.toString(), { headers: { "User-Agent": "moodverse-harvester/1.0" } });
+        if (!r.ok) break;
+        listJson = await r.json();
+      } catch { break; }
+      const members = listJson?.query?.categorymembers ?? [];
+      cmcontinue = listJson?.continue?.cmcontinue ?? null;
+      if (!members.length) break;
+      // Fetch extracts in batches of 20 pageids
+      for (let i = 0; i < members.length && takenThisLang < perLangCap; i += 20) {
+        const batch = members.slice(i, i + 20);
+        const pageids = batch.map((m: any) => m.pageid).join("|");
+        const exUrl = new URL(`https://${lang}.wikisource.org/w/api.php`);
+        exUrl.searchParams.set("action", "query");
+        exUrl.searchParams.set("prop", "extracts");
+        exUrl.searchParams.set("explaintext", "1");
+        exUrl.searchParams.set("exlimit", "20");
+        exUrl.searchParams.set("pageids", pageids);
+        exUrl.searchParams.set("format", "json");
+        exUrl.searchParams.set("origin", "*");
+        let exJson: any;
+        try {
+          const r = await fetch(exUrl.toString(), { headers: { "User-Agent": "moodverse-harvester/1.0" } });
+          if (!r.ok) continue;
+          exJson = await r.json();
+        } catch { continue; }
+        const pagesObj = exJson?.query?.pages ?? {};
+        for (const pid of Object.keys(pagesObj)) {
+          if (takenThisLang >= perLangCap) break;
+          const p = pagesObj[pid];
+          let raw = (p.extract ?? "").toString();
+          if (!raw) continue;
+          // Extract the first substantial poem-like block
+          raw = raw.replace(/\[\d+\]/g, "").trim();
+          const block = raw.split(/\n\s*\n/).map((s: string) => s.trim())
+            .find((s: string) => s.length > 120 && s.length < 2400);
+          if (!block) continue;
+          const title = (p.title ?? "").toString();
+          // Wikisource poem titles are often "Название (Автор)" — split cheaply.
+          let author = "Неизвестен";
+          let cleanTitle = title;
+          const m = title.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+          if (m) { cleanTitle = m[1].trim(); author = m[2].trim(); }
+          pieces.push({
+            text: block.slice(0, 3500),
+            author,
+            title: cleanTitle,
+            source_type: "poem",
+            language: lang,
+            emotions_tags: tagEmotions(block),
+            external_id: `wikisource:${lang}:${p.pageid}`,
+          });
+          takenThisLang++;
+        }
+      }
+      if (!cmcontinue) break;
+    }
+  }
+  return pieces;
+}
+
 // ---------- Embedding (Lovable AI Gateway) ----------
 async function embed(text: string, apiKey: string): Promise<number[] | null> {
   try {
@@ -148,7 +240,7 @@ serve(async (req) => {
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
     const url = new URL(req.url);
-    const sources = (url.searchParams.get("sources") ?? "poetrydb,gutendex").split(",");
+    const sources = (url.searchParams.get("sources") ?? "poetrydb,gutendex,wikisource").split(",");
     const limitPerSource = parseInt(url.searchParams.get("limit") ?? "300", 10);
     const langs = (url.searchParams.get("langs") ?? "ru,en").split(",");
     const doEmbed = url.searchParams.get("embed") !== "0" && !!LOVABLE_API_KEY;
@@ -156,6 +248,7 @@ serve(async (req) => {
     const all: Piece[] = [];
     if (sources.includes("poetrydb")) all.push(...await fetchPoetryDB(limitPerSource));
     if (sources.includes("gutendex")) all.push(...await fetchGutendex(limitPerSource, langs));
+    if (sources.includes("wikisource")) all.push(...await fetchWikisource(limitPerSource, langs));
 
     // Dedup by external_id against DB
     const ids = all.map((p) => p.external_id);
