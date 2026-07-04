@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -14,22 +14,41 @@ type Fav = {
   source_type: string | null; explanation: string | null; created_at: string;
 };
 
+const PAGE_SIZE = 24;
+
 const Favorites = () => {
   const { user, loading } = useAuth();
   const [favs, setFavs] = useState<Fav[]>([]);
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<string>("all");
   const [busy, setBusy] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+
+  const loadPage = useCallback(async (from: number) => {
+    const { data, error } = await supabase
+      .from("favorites")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) { toast.error("Не удалось загрузить"); return []; }
+    const rows = (data ?? []) as any as Fav[];
+    setHasMore(rows.length === PAGE_SIZE);
+    return rows;
+  }, []);
 
   useEffect(() => {
     if (!user) return;
-    supabase.from("favorites").select("*").order("created_at", { ascending: false })
-      .then(({ data, error }) => {
-        if (error) toast.error("Не удалось загрузить");
-        else setFavs((data ?? []) as any);
-        setBusy(false);
-      });
-  }, [user]);
+    setBusy(true);
+    loadPage(0).then((rows) => { setFavs(rows); setBusy(false); });
+  }, [user, loadPage]);
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    const rows = await loadPage(favs.length);
+    setFavs((prev) => [...prev, ...rows]);
+    setLoadingMore(false);
+  };
 
   if (loading) return null;
   if (!user) return <Navigate to="/auth" replace />;
@@ -94,6 +113,14 @@ const Favorites = () => {
             </article>
           ))}
         </div>
+
+        {!busy && hasMore && favs.length > 0 && !q && filter === "all" && (
+          <div className="flex justify-center mt-8">
+            <Button variant="ghost" onClick={loadMore} disabled={loadingMore} className="rounded-full">
+              {loadingMore ? "Загружаем..." : "Показать ещё"}
+            </Button>
+          </div>
+        )}
       </main>
     </>
   );
