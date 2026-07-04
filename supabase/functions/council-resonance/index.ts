@@ -152,6 +152,24 @@ serve(async (req) => {
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
+    // ---------- Rate limit (10 / hour per user or IP — council is heavier) ----------
+    let rateId = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || "anon";
+    const authHeaderRL = req.headers.get("Authorization") || "";
+    if (authHeaderRL && authHeaderRL !== `Bearer ${ANON}`) {
+      try {
+        const uc = createClient(SUPABASE_URL, ANON, { global: { headers: { Authorization: authHeaderRL } } });
+        const { data: ud } = await uc.auth.getUser();
+        if (ud?.user) rateId = `u:${ud.user.id}`;
+      } catch { /* fall back to IP */ }
+    }
+    const { data: allowed } = await supabase.rpc("check_rate_limit", {
+      p_identifier: rateId, p_endpoint: "council-resonance", p_max: 10, p_window_seconds: 3600,
+    });
+    if (allowed === false) {
+      return new Response(JSON.stringify({ error: "Совет отдыхает. Попробуйте через час." }),
+        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     // User memory (if logged in)
     let userMemory: { summary?: string; recurring_themes?: string[]; dominant_emotions?: string[]; agent_notes?: string } | null = null;
     const authHeader = req.headers.get("Authorization") || "";
