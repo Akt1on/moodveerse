@@ -47,6 +47,27 @@ export type Database = {
         }
         Relationships: []
       }
+      harvest_cursors: {
+        Row: {
+          cursor: string | null
+          key: string
+          source: string
+          updated_at: string
+        }
+        Insert: {
+          cursor?: string | null
+          key: string
+          source: string
+          updated_at?: string
+        }
+        Update: {
+          cursor?: string | null
+          key?: string
+          source?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       literary_works: {
         Row: {
           author: string
