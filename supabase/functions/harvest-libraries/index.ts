@@ -405,15 +405,17 @@ serve(async (req) => {
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
     const url = new URL(req.url);
-    const sources = (url.searchParams.get("sources") ?? "poetrydb,gutendex,wikisource").split(",");
+    const sources = (url.searchParams.get("sources") ?? "poetrydb,gutendex,wikisource,wikiquote,standardebooks").split(",");
     const limitPerSource = parseInt(url.searchParams.get("limit") ?? "300", 10);
-    const langs = (url.searchParams.get("langs") ?? "ru,en").split(",");
+    const langs = (url.searchParams.get("langs") ?? "ru,en,hy,fr,de,es").split(",");
     const doEmbed = url.searchParams.get("embed") !== "0" && !!LOVABLE_API_KEY;
 
     const all: Piece[] = [];
     if (sources.includes("poetrydb")) all.push(...await fetchPoetryDB(limitPerSource));
     if (sources.includes("gutendex")) all.push(...await fetchGutendex(limitPerSource, langs));
-    if (sources.includes("wikisource")) all.push(...await fetchWikisource(limitPerSource, langs));
+    if (sources.includes("wikisource")) all.push(...await fetchWikisource(supabase, limitPerSource, langs));
+    if (sources.includes("wikiquote")) all.push(...await fetchWikiquote(supabase, limitPerSource, langs));
+    if (sources.includes("standardebooks")) all.push(...await fetchStandardEbooks(limitPerSource));
 
     // Dedup by external_id against DB
     const ids = all.map((p) => p.external_id);
