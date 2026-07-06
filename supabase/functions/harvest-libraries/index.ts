@@ -124,95 +124,260 @@ async function fetchGutendex(limit: number, languages: string[]): Promise<Piece[
   return pieces;
 }
 
-// ---------- Source: Wikisource (RU / HY / EN / etc.) ----------
-// Uses MediaWiki API: list=categorymembers + prop=extracts&explaintext.
-// Configurable per-language: which category to sample from.
-const WIKISOURCE_CATEGORIES: Record<string, string> = {
-  ru: "Категория:Стихотворения_по_алфавиту",
-  hy: "Կատեգորիա:Բանաստեղծություններ",
-  en: "Category:Poems",
-  fr: "Catégorie:Poèmes",
+// ---------- Cursor helpers (resume where we left off) ----------
+async function getCursor(supabase: any, source: string, key: string): Promise<string | null> {
+  const { data } = await supabase.from("harvest_cursors").select("cursor")
+    .eq("source", source).eq("key", key).maybeSingle();
+  return data?.cursor ?? null;
+}
+async function setCursor(supabase: any, source: string, key: string, cursor: string | null) {
+  await supabase.from("harvest_cursors").upsert(
+    { source, key, cursor, updated_at: new Date().toISOString() },
+    { onConflict: "source,key" }
+  );
+}
+
+// ---------- Source: Wikisource (poems, elegies, songs, romances, prose) ----------
+// Multiple categories per language to widen coverage.
+const WIKISOURCE_CATEGORIES: Record<string, string[]> = {
+  ru: [
+    "Категория:Стихотворения_по_алфавиту",
+    "Категория:Русская_поэзия",
+    "Категория:Элегии",
+    "Категория:Романсы",
+    "Категория:Песни",
+    "Категория:Сонеты",
+  ],
+  hy: [
+    "Կատեգորիա:Բանաստեղծություններ",
+    "Կատեգորիա:Հայ_գրականություն",
+  ],
+  en: [
+    "Category:Poems",
+    "Category:Sonnets",
+    "Category:Elegies",
+    "Category:Ballads",
+  ],
+  fr: ["Catégorie:Poèmes", "Catégorie:Sonnets"],
+  de: ["Kategorie:Gedicht", "Kategorie:Lyrik"],
+  es: ["Categoría:Poemas", "Categoría:Sonetos"],
 };
 
-async function fetchWikisource(limit: number, languages: string[]): Promise<Piece[]> {
+async function fetchWikisource(supabase: any, limit: number, languages: string[]): Promise<Piece[]> {
   const pieces: Piece[] = [];
   for (const lang of languages) {
-    const category = WIKISOURCE_CATEGORIES[lang];
-    if (!category) continue;
-    const perLangCap = limit;
-    let cmcontinue: string | null = null;
-    let pages = 0;
-    let takenThisLang = 0;
-    while (takenThisLang < perLangCap && pages < 8) {
-      pages++;
-      const listUrl = new URL(`https://${lang}.wikisource.org/w/api.php`);
-      listUrl.searchParams.set("action", "query");
-      listUrl.searchParams.set("list", "categorymembers");
-      listUrl.searchParams.set("cmtitle", category);
-      listUrl.searchParams.set("cmlimit", "50");
-      listUrl.searchParams.set("cmtype", "page");
-      listUrl.searchParams.set("format", "json");
-      listUrl.searchParams.set("origin", "*");
-      if (cmcontinue) listUrl.searchParams.set("cmcontinue", cmcontinue);
-      let listJson: any;
-      try {
-        const r = await fetch(listUrl.toString(), { headers: { "User-Agent": "moodverse-harvester/1.0" } });
-        if (!r.ok) break;
-        listJson = await r.json();
-      } catch { break; }
-      const members = listJson?.query?.categorymembers ?? [];
-      cmcontinue = listJson?.continue?.cmcontinue ?? null;
-      if (!members.length) break;
-      // Fetch extracts in batches of 20 pageids
-      for (let i = 0; i < members.length && takenThisLang < perLangCap; i += 20) {
-        const batch = members.slice(i, i + 20);
-        const pageids = batch.map((m: any) => m.pageid).join("|");
-        const exUrl = new URL(`https://${lang}.wikisource.org/w/api.php`);
-        exUrl.searchParams.set("action", "query");
-        exUrl.searchParams.set("prop", "extracts");
-        exUrl.searchParams.set("explaintext", "1");
-        exUrl.searchParams.set("exlimit", "20");
-        exUrl.searchParams.set("pageids", pageids);
-        exUrl.searchParams.set("format", "json");
-        exUrl.searchParams.set("origin", "*");
-        let exJson: any;
+    const cats = WIKISOURCE_CATEGORIES[lang];
+    if (!cats) continue;
+    for (const category of cats) {
+      if (pieces.length >= limit * languages.length) break;
+      const cursorKey = `${lang}:${category}`;
+      let cmcontinue: string | null = await getCursor(supabase, "wikisource", cursorKey);
+      let pages = 0;
+      let takenThisCat = 0;
+      const perCatCap = Math.max(20, Math.floor(limit / cats.length));
+      while (takenThisCat < perCatCap && pages < 6) {
+        pages++;
+        const listUrl = new URL(`https://${lang}.wikisource.org/w/api.php`);
+        listUrl.searchParams.set("action", "query");
+        listUrl.searchParams.set("list", "categorymembers");
+        listUrl.searchParams.set("cmtitle", category);
+        listUrl.searchParams.set("cmlimit", "50");
+        listUrl.searchParams.set("cmtype", "page");
+        listUrl.searchParams.set("format", "json");
+        listUrl.searchParams.set("origin", "*");
+        if (cmcontinue) listUrl.searchParams.set("cmcontinue", cmcontinue);
+        let listJson: any;
         try {
-          const r = await fetch(exUrl.toString(), { headers: { "User-Agent": "moodverse-harvester/1.0" } });
-          if (!r.ok) continue;
-          exJson = await r.json();
-        } catch { continue; }
-        const pagesObj = exJson?.query?.pages ?? {};
-        for (const pid of Object.keys(pagesObj)) {
-          if (takenThisLang >= perLangCap) break;
-          const p = pagesObj[pid];
-          let raw = (p.extract ?? "").toString();
-          if (!raw) continue;
-          // Extract the first substantial poem-like block
-          raw = raw.replace(/\[\d+\]/g, "").trim();
-          const block = raw.split(/\n\s*\n/).map((s: string) => s.trim())
-            .find((s: string) => s.length > 120 && s.length < 2400);
-          if (!block) continue;
-          const title = (p.title ?? "").toString();
-          // Wikisource poem titles are often "Название (Автор)" — split cheaply.
-          let author = "Неизвестен";
-          let cleanTitle = title;
-          const m = title.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
-          if (m) { cleanTitle = m[1].trim(); author = m[2].trim(); }
-          pieces.push({
-            text: block.slice(0, 3500),
-            author,
-            title: cleanTitle,
-            source_type: "poem",
-            language: lang,
-            emotions_tags: tagEmotions(block),
-            external_id: `wikisource:${lang}:${p.pageid}`,
-          });
-          takenThisLang++;
+          const r = await fetch(listUrl.toString(), { headers: { "User-Agent": "moodverse-harvester/1.0" } });
+          if (!r.ok) break;
+          listJson = await r.json();
+        } catch { break; }
+        const members = listJson?.query?.categorymembers ?? [];
+        cmcontinue = listJson?.continue?.cmcontinue ?? null;
+        if (!members.length) break;
+        for (let i = 0; i < members.length && takenThisCat < perCatCap; i += 20) {
+          const batch = members.slice(i, i + 20);
+          const pageids = batch.map((m: any) => m.pageid).join("|");
+          const exUrl = new URL(`https://${lang}.wikisource.org/w/api.php`);
+          exUrl.searchParams.set("action", "query");
+          exUrl.searchParams.set("prop", "extracts");
+          exUrl.searchParams.set("explaintext", "1");
+          exUrl.searchParams.set("exlimit", "20");
+          exUrl.searchParams.set("pageids", pageids);
+          exUrl.searchParams.set("format", "json");
+          exUrl.searchParams.set("origin", "*");
+          let exJson: any;
+          try {
+            const r = await fetch(exUrl.toString(), { headers: { "User-Agent": "moodverse-harvester/1.0" } });
+            if (!r.ok) continue;
+            exJson = await r.json();
+          } catch { continue; }
+          const pagesObj = exJson?.query?.pages ?? {};
+          for (const pid of Object.keys(pagesObj)) {
+            if (takenThisCat >= perCatCap) break;
+            const p = pagesObj[pid];
+            let raw = (p.extract ?? "").toString();
+            if (!raw) continue;
+            raw = raw.replace(/\[\d+\]/g, "").trim();
+            const block = raw.split(/\n\s*\n/).map((s: string) => s.trim())
+              .find((s: string) => s.length > 120 && s.length < 2400);
+            if (!block) continue;
+            const title = (p.title ?? "").toString();
+            let author = "Неизвестен";
+            let cleanTitle = title;
+            const m = title.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+            if (m) { cleanTitle = m[1].trim(); author = m[2].trim(); }
+            pieces.push({
+              text: block.slice(0, 3500),
+              author, title: cleanTitle,
+              source_type: "poem", language: lang,
+              emotions_tags: tagEmotions(block),
+              external_id: `wikisource:${lang}:${p.pageid}`,
+            });
+            takenThisCat++;
+          }
         }
+        if (!cmcontinue) break;
       }
-      if (!cmcontinue) break;
+      await setCursor(supabase, "wikisource", cursorKey, cmcontinue);
     }
   }
+  return pieces;
+}
+
+// ---------- Source: Wikiquote (quotes from authors, books, films) ----------
+const WIKIQUOTE_CATEGORIES: Record<string, string[]> = {
+  ru: ["Категория:Писатели", "Категория:Поэты", "Категория:Фильмы"],
+  hy: ["Կատեգորիա:Գրողներ"],
+  en: ["Category:Writers", "Category:Poets", "Category:Films", "Category:Books"],
+  fr: ["Catégorie:Écrivains"],
+  de: ["Kategorie:Autor"],
+  es: ["Categoría:Escritores"],
+};
+
+function extractQuotes(text: string): string[] {
+  // Wikiquote plain-text extracts have quotes as bullet lines or paragraphs.
+  const lines = text.split(/\n+/).map((l) => l.replace(/^[•·*\-—]\s*/, "").trim());
+  const out: string[] = [];
+  for (const l of lines) {
+    if (l.length < 60 || l.length > 600) continue;
+    if (/^(References|См\.\s?также|Notes|Внешние ссылки|Ссылки|Sources)/i.test(l)) continue;
+    if (/^={2,}/.test(l)) continue; // section headers
+    out.push(l);
+  }
+  return out.slice(0, 4); // top 4 quotes per page
+}
+
+async function fetchWikiquote(supabase: any, limit: number, languages: string[]): Promise<Piece[]> {
+  const pieces: Piece[] = [];
+  for (const lang of languages) {
+    const cats = WIKIQUOTE_CATEGORIES[lang];
+    if (!cats) continue;
+    for (const category of cats) {
+      if (pieces.length >= limit * languages.length) break;
+      const cursorKey = `${lang}:${category}`;
+      let cmcontinue: string | null = await getCursor(supabase, "wikiquote", cursorKey);
+      let pages = 0;
+      let takenThisCat = 0;
+      const perCatCap = Math.max(15, Math.floor(limit / cats.length));
+      while (takenThisCat < perCatCap && pages < 5) {
+        pages++;
+        const listUrl = new URL(`https://${lang}.wikiquote.org/w/api.php`);
+        listUrl.searchParams.set("action", "query");
+        listUrl.searchParams.set("list", "categorymembers");
+        listUrl.searchParams.set("cmtitle", category);
+        listUrl.searchParams.set("cmlimit", "40");
+        listUrl.searchParams.set("cmtype", "page");
+        listUrl.searchParams.set("format", "json");
+        listUrl.searchParams.set("origin", "*");
+        if (cmcontinue) listUrl.searchParams.set("cmcontinue", cmcontinue);
+        let listJson: any;
+        try {
+          const r = await fetch(listUrl.toString(), { headers: { "User-Agent": "moodverse-harvester/1.0" } });
+          if (!r.ok) break;
+          listJson = await r.json();
+        } catch { break; }
+        const members = listJson?.query?.categorymembers ?? [];
+        cmcontinue = listJson?.continue?.cmcontinue ?? null;
+        if (!members.length) break;
+        for (let i = 0; i < members.length && takenThisCat < perCatCap; i += 20) {
+          const batch = members.slice(i, i + 20);
+          const pageids = batch.map((m: any) => m.pageid).join("|");
+          const exUrl = new URL(`https://${lang}.wikiquote.org/w/api.php`);
+          exUrl.searchParams.set("action", "query");
+          exUrl.searchParams.set("prop", "extracts");
+          exUrl.searchParams.set("explaintext", "1");
+          exUrl.searchParams.set("exlimit", "20");
+          exUrl.searchParams.set("pageids", pageids);
+          exUrl.searchParams.set("format", "json");
+          exUrl.searchParams.set("origin", "*");
+          let exJson: any;
+          try {
+            const r = await fetch(exUrl.toString(), { headers: { "User-Agent": "moodverse-harvester/1.0" } });
+            if (!r.ok) continue;
+            exJson = await r.json();
+          } catch { continue; }
+          const pagesObj = exJson?.query?.pages ?? {};
+          for (const pid of Object.keys(pagesObj)) {
+            if (takenThisCat >= perCatCap) break;
+            const p = pagesObj[pid];
+            const raw = (p.extract ?? "").toString();
+            if (!raw) continue;
+            const quotes = extractQuotes(raw);
+            const author = (p.title ?? "").toString();
+            quotes.forEach((q, idx) => {
+              pieces.push({
+                text: q,
+                author,
+                source_type: "quote",
+                language: lang,
+                emotions_tags: tagEmotions(q),
+                external_id: `wikiquote:${lang}:${p.pageid}:${idx}`,
+              });
+              takenThisCat++;
+            });
+          }
+        }
+        if (!cmcontinue) break;
+      }
+      await setCursor(supabase, "wikiquote", cursorKey, cmcontinue);
+    }
+  }
+  return pieces;
+}
+
+// ---------- Source: Standard Ebooks (curated classic literature, atom feed) ----------
+async function fetchStandardEbooks(limit: number): Promise<Piece[]> {
+  const pieces: Piece[] = [];
+  try {
+    const r = await fetch("https://standardebooks.org/feeds/atom/new-releases", {
+      headers: { "User-Agent": "moodverse-harvester/1.0" },
+    });
+    if (!r.ok) return pieces;
+    const xml = await r.text();
+    // Cheap XML parsing — extract <entry> blocks
+    const entries = xml.split(/<entry\b/).slice(1);
+    for (const entryChunk of entries) {
+      if (pieces.length >= limit) break;
+      const entry = "<entry" + entryChunk.split("</entry>")[0] + "</entry>";
+      const title = /<title[^>]*>([^<]+)<\/title>/.exec(entry)?.[1]?.trim();
+      const author = /<name>([^<]+)<\/name>/.exec(entry)?.[1]?.trim() ?? "Unknown";
+      const summary = /<summary[^>]*>([\s\S]*?)<\/summary>/.exec(entry)?.[1]?.trim();
+      const id = /<id>([^<]+)<\/id>/.exec(entry)?.[1]?.trim();
+      if (!title || !summary || !id) continue;
+      // strip HTML from summary
+      const text = summary.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      if (text.length < 120) continue;
+      pieces.push({
+        text: text.slice(0, 2000),
+        author, title,
+        source_type: "book",
+        language: "en",
+        emotions_tags: tagEmotions(text),
+        external_id: `standardebooks:${id.split("/").pop()}`.slice(0, 200),
+      });
+    }
+  } catch { /* ignore */ }
   return pieces;
 }
 
