@@ -381,6 +381,146 @@ async function fetchStandardEbooks(limit: number): Promise<Piece[]> {
   return pieces;
 }
 
+// ---------- Source: Firecrawl (AI web search + scrape across the whole internet) ----------
+// Uses Firecrawl v2 /search to find poems, quotes and monologues by thematic queries,
+// then extracts the strongest passages from the scraped markdown.
+const FIRECRAWL_QUERIES: Record<string, string[]> = {
+  ru: [
+    "стихи о любви полный текст",
+    "стихи о грусти и одиночестве",
+    "стихи о надежде и свете",
+    "русские элегии полный текст",
+    "цитаты из русской литературы о смысле жизни",
+    "монолог из русской пьесы текст",
+  ],
+  en: [
+    "poem about love full text",
+    "poem about loneliness full text",
+    "poem about hope full text",
+    "famous literary quotes about grief",
+    "shakespeare monologue full text",
+  ],
+  hy: [
+    "հայկական բանաստեղծություններ սիրո մասին",
+    "հայկական բանաստեղծություններ կարոտի մասին",
+  ],
+  fr: ["poème sur l'amour texte complet", "poème sur la tristesse texte"],
+  de: ["gedicht über liebe volltext", "gedicht über einsamkeit"],
+  es: ["poema sobre el amor texto completo", "poema sobre la tristeza"],
+};
+
+function extractPassagesFromMarkdown(md: string, sourceType: "poem" | "quote"): string[] {
+  if (!md) return [];
+  // Drop code blocks, images and link URLs (keep link text)
+  const cleaned = md
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/<[^>]+>/g, " ");
+  const blocks = cleaned.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
+  const out: string[] = [];
+  for (const b of blocks) {
+    if (sourceType === "poem") {
+      // Poems: multi-line block with line breaks, reasonable length.
+      const lines = b.split(/\n/).map((l) => l.trim()).filter(Boolean);
+      if (lines.length < 4 || lines.length > 60) continue;
+      const joined = lines.join("\n");
+      if (joined.length < 120 || joined.length > 3000) continue;
+      if (/subscribe|cookie|©|copyright|privacy|подписка|реклама/i.test(joined)) continue;
+      out.push(joined);
+    } else {
+      const single = b.replace(/\s+/g, " ").trim();
+      if (single.length < 80 || single.length > 500) continue;
+      if (/subscribe|cookie|©|privacy|подписка|реклама/i.test(single)) continue;
+      out.push(single);
+    }
+    if (out.length >= 3) break;
+  }
+  return out;
+}
+
+async function fetchFirecrawl(supabase: any, limit: number, languages: string[]): Promise<Piece[]> {
+  const apiKey = Deno.env.get("FIRECRAWL_API_KEY");
+  if (!apiKey) {
+    console.warn("FIRECRAWL_API_KEY missing — skipping firecrawl source");
+    return [];
+  }
+  const pieces: Piece[] = [];
+  const perQueryCap = Math.max(3, Math.floor(limit / 8));
+  for (const lang of languages) {
+    const queries = FIRECRAWL_QUERIES[lang];
+    if (!queries) continue;
+    for (const query of queries) {
+      if (pieces.length >= limit * languages.length) break;
+      // Cursor stores rotating result offset per (lang, query) so repeated runs cover new pages.
+      const cursorKey = `${lang}:${query}`;
+      const prev = await getCursor(supabase, "firecrawl", cursorKey);
+      const offset = prev ? parseInt(prev, 10) || 0 : 0;
+      const sourceType: "poem" | "quote" = /цитат|quote|monolog|монолог/i.test(query) ? "quote" : "poem";
+
+      let searchJson: any;
+      try {
+        const r = await fetch("https://api.firecrawl.dev/v2/search", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            query,
+            limit: 5,
+            lang,
+            scrapeOptions: { formats: ["markdown"], onlyMainContent: true },
+          }),
+        });
+        if (!r.ok) {
+          const errText = await r.text();
+          console.warn(`firecrawl search failed [${r.status}]`, errText.slice(0, 200));
+          continue;
+        }
+        searchJson = await r.json();
+      } catch (e) {
+        console.warn("firecrawl search error", e);
+        continue;
+      }
+
+      const results = searchJson?.data?.web ?? searchJson?.data ?? [];
+      if (!Array.isArray(results) || !results.length) continue;
+
+      let taken = 0;
+      for (let i = 0; i < results.length && taken < perQueryCap; i++) {
+        const res = results[i];
+        const md: string = res?.markdown ?? res?.data?.markdown ?? "";
+        const url: string = res?.url ?? res?.metadata?.sourceURL ?? "";
+        const pageTitle: string = res?.title ?? res?.metadata?.title ?? "";
+        if (!md || !url) continue;
+        const passages = extractPassagesFromMarkdown(md, sourceType);
+        for (let p = 0; p < passages.length && taken < perQueryCap; p++) {
+          const text = passages[p];
+          // Cheap author guess: markdown often has "— Author" or "by Author" trailing lines.
+          let author = "Неизвестен";
+          const m1 = text.match(/[—–-]\s*([A-ZА-ЯЁŐŐÁÉÍÓÖŐÚÜŰ][^\n]{2,60})$/);
+          const m2 = pageTitle.match(/^(.+?)\s+[—–-]\s+/);
+          if (m1) author = m1[1].trim();
+          else if (m2) author = m2[1].trim();
+          pieces.push({
+            text: text.slice(0, 3500),
+            author,
+            title: pageTitle ? pageTitle.slice(0, 200) : undefined,
+            source_type: sourceType,
+            language: lang,
+            emotions_tags: tagEmotions(text),
+            external_id: `firecrawl:${lang}:${(offset + i).toString(36)}:${p}:${url.slice(-60)}`.slice(0, 200),
+          });
+          taken++;
+        }
+      }
+      await setCursor(supabase, "firecrawl", cursorKey, String(offset + results.length));
+    }
+  }
+  return pieces;
+}
+
 // ---------- Embedding (Lovable AI Gateway) ----------
 async function embed(text: string, apiKey: string): Promise<number[] | null> {
   try {
@@ -405,7 +545,7 @@ serve(async (req) => {
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
     const url = new URL(req.url);
-    const sources = (url.searchParams.get("sources") ?? "poetrydb,gutendex,wikisource,wikiquote,standardebooks").split(",");
+    const sources = (url.searchParams.get("sources") ?? "poetrydb,gutendex,wikisource,wikiquote,standardebooks,firecrawl").split(",");
     const limitPerSource = parseInt(url.searchParams.get("limit") ?? "300", 10);
     const langs = (url.searchParams.get("langs") ?? "ru,en,hy,fr,de,es").split(",");
     const doEmbed = url.searchParams.get("embed") !== "0" && !!LOVABLE_API_KEY;
@@ -416,6 +556,7 @@ serve(async (req) => {
     if (sources.includes("wikisource")) all.push(...await fetchWikisource(supabase, limitPerSource, langs));
     if (sources.includes("wikiquote")) all.push(...await fetchWikiquote(supabase, limitPerSource, langs));
     if (sources.includes("standardebooks")) all.push(...await fetchStandardEbooks(limitPerSource));
+    if (sources.includes("firecrawl")) all.push(...await fetchFirecrawl(supabase, limitPerSource, langs));
 
     // Dedup by external_id against DB
     const ids = all.map((p) => p.external_id);
