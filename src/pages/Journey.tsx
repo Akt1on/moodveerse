@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Sparkles, Brain, Loader2, RefreshCw } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { LibraryStats } from "@/components/moodverse/LibraryStats";
 
 type Entry = {
   id: string;
@@ -237,6 +238,8 @@ const Journey = () => {
                 </div>
               )}
             </section>
+
+            <LibraryStats />
 
             <p className="text-center text-xs text-muted-foreground/60 italic font-serif pt-4">
               Всего {entries.length} {entries.length === 1 ? "запись" : entries.length < 5 ? "записи" : "записей"}

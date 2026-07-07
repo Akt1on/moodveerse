@@ -247,6 +247,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      library_stats: { Args: never; Returns: Json }
       match_literary_lexical: {
         Args: {
           match_count?: number
