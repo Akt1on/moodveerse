@@ -710,11 +710,12 @@ serve(async (req) => {
     if (sources.includes("internetarchive")) all.push(...await fetchInternetArchive(supabase, limitPerSource, langs));
     if (sources.includes("firecrawl")) all.push(...await fetchFirecrawl(supabase, limitPerSource, langs));
 
-    // Dedup inside this batch first (sources can return the same piece twice)
+    // Uniqueness in DB is (source_type, external_id) — dedup on the same composite key.
     const localSeen = new Set<string>();
     const unique = all.filter((p) => {
-      if (localSeen.has(p.external_id)) return false;
-      localSeen.add(p.external_id);
+      const k = `${p.source_type}::${p.external_id}`;
+      if (localSeen.has(k)) return false;
+      localSeen.add(k);
       return true;
     });
 
@@ -723,11 +724,11 @@ serve(async (req) => {
     const ids = unique.map((p) => p.external_id);
     for (let i = 0; i < ids.length; i += 50) {
       const { data: have, error } = await supabase
-        .from("literary_works").select("external_id").in("external_id", ids.slice(i, i + 50));
+        .from("literary_works").select("external_id, source_type").in("external_id", ids.slice(i, i + 50));
       if (error) { console.error("dedup lookup", error); continue; }
-      for (const r of have ?? []) seen.add(r.external_id);
+      for (const r of have ?? []) seen.add(`${r.source_type}::${r.external_id}`);
     }
-    const fresh = unique.filter((p) => !seen.has(p.external_id));
+    const fresh = unique.filter((p) => !seen.has(`${p.source_type}::${p.external_id}`));
 
     let inserted = 0, failed = 0;
     for (let i = 0; i < fresh.length; i += 25) {
@@ -741,11 +742,14 @@ serve(async (req) => {
           external_id: p.external_id, embedding: embedding as any,
         };
       }));
-      const { error, data } = await supabase.from("literary_works")
-        .upsert(rows, { onConflict: "source_type,external_id", ignoreDuplicates: true })
-        .select("id");
-      if (error) { console.error("insert", error); failed += chunk.length; }
-      else inserted += data?.length ?? 0;
+      const { error, data } = await supabase.from("literary_works").insert(rows).select("id");
+      if (!error) { inserted += data?.length ?? 0; continue; }
+      // Fall back to row-by-row so one bad/duplicate row doesn't kill the whole chunk.
+      for (const row of rows) {
+        const { error: e1 } = await supabase.from("literary_works").insert(row);
+        if (e1) { if (e1.code !== "23505") console.error("insert", e1); failed++; }
+        else inserted++;
+      }
     }
 
     return new Response(JSON.stringify({
