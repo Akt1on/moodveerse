@@ -710,12 +710,20 @@ serve(async (req) => {
     if (sources.includes("internetarchive")) all.push(...await fetchInternetArchive(supabase, limitPerSource, langs));
     if (sources.includes("firecrawl")) all.push(...await fetchFirecrawl(supabase, limitPerSource, langs));
 
+    // Dedup inside this batch first (sources can return the same piece twice)
+    const localSeen = new Set<string>();
+    const unique = all.filter((p) => {
+      if (localSeen.has(p.external_id)) return false;
+      localSeen.add(p.external_id);
+      return true;
+    });
+
     // Dedup by external_id against DB
-    const ids = all.map((p) => p.external_id);
+    const ids = unique.map((p) => p.external_id);
     const { data: have } = await supabase
       .from("literary_works").select("external_id").in("external_id", ids);
     const seen = new Set((have ?? []).map((r: any) => r.external_id));
-    const fresh = all.filter((p) => !seen.has(p.external_id));
+    const fresh = unique.filter((p) => !seen.has(p.external_id));
 
     let inserted = 0, failed = 0;
     for (let i = 0; i < fresh.length; i += 25) {
