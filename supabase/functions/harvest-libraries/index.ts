@@ -521,6 +521,132 @@ async function fetchFirecrawl(supabase: any, limit: number, languages: string[])
   return pieces;
 }
 
+// ---------- Source: Quotable.io (curated quotes, EN) ----------
+async function fetchQuotable(supabase: any, limit: number): Promise<Piece[]> {
+  const pieces: Piece[] = [];
+  const prev = await getCursor(supabase, "quotable", "all");
+  let page = prev ? (parseInt(prev, 10) || 1) : 1;
+  const maxPages = Math.max(1, Math.ceil(limit / 100));
+  for (let i = 0; i < maxPages; i++) {
+    try {
+      const r = await fetch(`https://api.quotable.io/quotes?limit=100&page=${page}`);
+      if (!r.ok) break;
+      const j = await r.json();
+      const results = j?.results ?? [];
+      if (!results.length) { page = 1; break; }
+      for (const q of results) {
+        const text = (q.content ?? "").toString().trim();
+        if (text.length < 40) continue;
+        pieces.push({
+          text,
+          author: q.author ?? "Unknown",
+          source_type: "quote",
+          language: "en",
+          emotions_tags: tagEmotions(text),
+          external_id: `quotable:${q._id}`,
+        });
+      }
+      page = j?.totalPages && page >= j.totalPages ? 1 : page + 1;
+    } catch { break; }
+  }
+  await setCursor(supabase, "quotable", "all", String(page));
+  return pieces.slice(0, limit);
+}
+
+// ---------- Source: Poemist (random world poetry, EN) ----------
+async function fetchPoemist(limit: number): Promise<Piece[]> {
+  const pieces: Piece[] = [];
+  const rounds = Math.min(12, Math.max(1, Math.ceil(limit / 5)));
+  for (let i = 0; i < rounds; i++) {
+    try {
+      const r = await fetch("https://www.poemist.com/api/v1/randompoems");
+      if (!r.ok) break;
+      const arr = await r.json();
+      if (!Array.isArray(arr)) break;
+      for (const p of arr) {
+        const text = (p.content ?? "").toString().trim();
+        if (text.length < 100) continue;
+        pieces.push({
+          text: text.slice(0, 4000),
+          author: p.poet?.name ?? "Unknown",
+          title: p.title ?? undefined,
+          source_type: "poem",
+          language: "en",
+          emotions_tags: tagEmotions(text),
+          external_id: `poemist:${(p.title ?? "").slice(0, 80)}:${(p.poet?.name ?? "").slice(0, 60)}`.slice(0, 200),
+        });
+      }
+    } catch { break; }
+  }
+  return pieces.slice(0, limit);
+}
+
+// ---------- Source: Internet Archive (full-text public-domain books, multi-language) ----------
+const IA_LANG: Record<string, string> = {
+  ru: "Russian", en: "English", hy: "Armenian",
+  fr: "French", de: "German", es: "Spanish",
+};
+
+async function fetchInternetArchive(supabase: any, limit: number, languages: string[]): Promise<Piece[]> {
+  const pieces: Piece[] = [];
+  const perLang = Math.max(10, Math.floor(limit / Math.max(1, languages.length)));
+  for (const lang of languages) {
+    const iaLang = IA_LANG[lang];
+    if (!iaLang) continue;
+    const prev = await getCursor(supabase, "internetarchive", lang);
+    const page = prev ? (parseInt(prev, 10) || 1) : 1;
+    let taken = 0;
+    const q = `(subject:("poetry") OR subject:("poems") OR subject:("literature")) AND language:(${iaLang}) AND mediatype:(texts)`;
+    const searchUrl = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(q)}` +
+      `&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=creator&fl%5B%5D=year&rows=25&page=${page}&output=json`;
+    let docs: any[] = [];
+    try {
+      const r = await fetch(searchUrl, { headers: { "User-Agent": "moodverse-harvester/1.0" } });
+      if (r.ok) {
+        const j = await r.json();
+        docs = j?.response?.docs ?? [];
+      }
+    } catch { /* skip lang */ }
+    if (!docs.length) { await setCursor(supabase, "internetarchive", lang, "1"); continue; }
+
+    for (const doc of docs) {
+      if (taken >= perLang) break;
+      const id = doc.identifier;
+      if (!id) continue;
+      try {
+        const mr = await fetch(`https://archive.org/metadata/${encodeURIComponent(id)}`);
+        if (!mr.ok) continue;
+        const meta = await mr.json();
+        const txt = (meta?.files ?? []).find((f: any) =>
+          typeof f.name === "string" && /\.txt$/i.test(f.name) && !/_meta|_chocr|_djvu\.xml/i.test(f.name));
+        if (!txt) continue;
+        const tr = await fetch(`https://archive.org/download/${encodeURIComponent(id)}/${encodeURIComponent(txt.name)}`);
+        if (!tr.ok) continue;
+        const raw = (await tr.text()).slice(0, 400000);
+        const paras = raw.split(/\n\s*\n/).map((p) => p.replace(/\s+/g, " ").trim())
+          .filter((p) => p.length > 220 && p.length < 1600 && !/archive\.org|scanned|OCR|digitized/i.test(p));
+        const author = Array.isArray(doc.creator) ? doc.creator[0] : (doc.creator ?? "Unknown");
+        const title = doc.title ?? id;
+        paras.slice(0, 5).forEach((text, i) => {
+          pieces.push({
+            text,
+            author: String(author).slice(0, 200),
+            title: String(title).slice(0, 200),
+            source_type: "book",
+            language: lang,
+            year: typeof doc.year === "number" ? doc.year : undefined,
+            emotions_tags: tagEmotions(text),
+            external_id: `ia:${id}:${i}`.slice(0, 200),
+          });
+          taken++;
+        });
+      } catch { /* skip item */ }
+    }
+    await setCursor(supabase, "internetarchive", lang, String(page + 1));
+  }
+  return pieces;
+}
+
 // ---------- Embedding (Lovable AI Gateway) ----------
 async function embed(text: string, apiKey: string): Promise<number[] | null> {
   try {
@@ -545,7 +671,8 @@ serve(async (req) => {
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
     const url = new URL(req.url);
-    const sources = (url.searchParams.get("sources") ?? "poetrydb,gutendex,wikisource,wikiquote,standardebooks,firecrawl").split(",");
+    const sources = (url.searchParams.get("sources") ??
+      "poetrydb,gutendex,wikisource,wikiquote,standardebooks,quotable,poemist,internetarchive,firecrawl").split(",");
     const limitPerSource = parseInt(url.searchParams.get("limit") ?? "300", 10);
     const langs = (url.searchParams.get("langs") ?? "ru,en,hy,fr,de,es").split(",");
     const doEmbed = url.searchParams.get("embed") !== "0" && !!LOVABLE_API_KEY;
@@ -556,6 +683,9 @@ serve(async (req) => {
     if (sources.includes("wikisource")) all.push(...await fetchWikisource(supabase, limitPerSource, langs));
     if (sources.includes("wikiquote")) all.push(...await fetchWikiquote(supabase, limitPerSource, langs));
     if (sources.includes("standardebooks")) all.push(...await fetchStandardEbooks(limitPerSource));
+    if (sources.includes("quotable")) all.push(...await fetchQuotable(supabase, limitPerSource));
+    if (sources.includes("poemist")) all.push(...await fetchPoemist(limitPerSource));
+    if (sources.includes("internetarchive")) all.push(...await fetchInternetArchive(supabase, limitPerSource, langs));
     if (sources.includes("firecrawl")) all.push(...await fetchFirecrawl(supabase, limitPerSource, langs));
 
     // Dedup by external_id against DB
