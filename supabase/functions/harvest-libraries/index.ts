@@ -521,6 +521,154 @@ async function fetchFirecrawl(supabase: any, limit: number, languages: string[])
   return pieces;
 }
 
+// ---------- Source: quote APIs (ZenQuotes + FreeAPI curated quotes, EN) ----------
+async function fetchQuotable(supabase: any, limit: number): Promise<Piece[]> {
+  const pieces: Piece[] = [];
+
+  // ZenQuotes — 50 random curated quotes per call.
+  const rounds = Math.min(4, Math.max(1, Math.ceil(limit / 50)));
+  for (let i = 0; i < rounds; i++) {
+    try {
+      const r = await fetch("https://zenquotes.io/api/quotes");
+      if (!r.ok) break;
+      const arr = await r.json();
+      if (!Array.isArray(arr)) break;
+      for (const q of arr) {
+        const text = (q.q ?? "").toString().trim();
+        const author = (q.a ?? "Unknown").toString().trim();
+        if (text.length < 40 || /zenquotes/i.test(text)) continue;
+        pieces.push({
+          text, author, source_type: "quote", language: "en",
+          emotions_tags: tagEmotions(text),
+          external_id: `zenquotes:${author}:${text.slice(0, 60)}`.slice(0, 200),
+        });
+      }
+    } catch { break; }
+  }
+
+  // FreeAPI quotes — paginated catalogue, cursor keeps position between runs.
+  const prev = await getCursor(supabase, "quotable", "freeapi");
+  let page = prev ? (parseInt(prev, 10) || 1) : 1;
+  for (let i = 0; i < 3 && pieces.length < limit * 2; i++) {
+    try {
+      const r = await fetch(`https://api.freeapi.app/api/v1/public/quotes?page=${page}&limit=50`);
+      if (!r.ok) break;
+      const j = await r.json();
+      const items = j?.data?.data ?? [];
+      if (!items.length) { page = 1; break; }
+      for (const q of items) {
+        const text = (q.content ?? "").toString().trim();
+        if (text.length < 40) continue;
+        pieces.push({
+          text,
+          author: (q.author ?? "Unknown").toString(),
+          source_type: "quote", language: "en",
+          emotions_tags: tagEmotions(text),
+          external_id: `freeapiquote:${q._id ?? text.slice(0, 60)}`.slice(0, 200),
+        });
+      }
+      page = j?.data?.nextPage ? page + 1 : 1;
+    } catch { break; }
+  }
+  await setCursor(supabase, "quotable", "freeapi", String(page));
+
+  return pieces.slice(0, limit);
+}
+
+// ---------- Source: PoetryDB random (fresh world poetry each run) ----------
+async function fetchPoemist(limit: number): Promise<Piece[]> {
+  const pieces: Piece[] = [];
+  const rounds = Math.min(6, Math.max(1, Math.ceil(limit / 20)));
+  for (let i = 0; i < rounds; i++) {
+    try {
+      const r = await fetch("https://poetrydb.org/random/20");
+      if (!r.ok) break;
+      const arr = await r.json();
+      if (!Array.isArray(arr)) break;
+      for (const p of arr) {
+        const text = (p.lines ?? []).join("\n").trim();
+        if (text.length < 100) continue;
+        pieces.push({
+          text: text.slice(0, 4000),
+          author: p.author ?? "Unknown",
+          title: p.title ?? undefined,
+          source_type: "poem",
+          language: "en",
+          emotions_tags: tagEmotions(text),
+          external_id: `poetrydb:${p.author}:${p.title}`.slice(0, 200),
+        });
+      }
+    } catch { break; }
+  }
+  return pieces.slice(0, limit);
+}
+
+// ---------- Source: Internet Archive (full-text public-domain books, multi-language) ----------
+const IA_LANG: Record<string, string> = {
+  ru: "Russian", en: "English", hy: "Armenian",
+  fr: "French", de: "German", es: "Spanish",
+};
+
+async function fetchInternetArchive(supabase: any, limit: number, languages: string[]): Promise<Piece[]> {
+  const pieces: Piece[] = [];
+  const perLang = Math.max(10, Math.floor(limit / Math.max(1, languages.length)));
+  for (const lang of languages) {
+    const iaLang = IA_LANG[lang];
+    if (!iaLang) continue;
+    const prev = await getCursor(supabase, "internetarchive", lang);
+    const page = prev ? (parseInt(prev, 10) || 1) : 1;
+    let taken = 0;
+    const q = `(subject:("poetry") OR subject:("poems") OR subject:("literature")) AND language:(${iaLang}) AND mediatype:(texts)`;
+    const searchUrl = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(q)}` +
+      `&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=creator&fl%5B%5D=year&rows=25&page=${page}&output=json`;
+    let docs: any[] = [];
+    try {
+      const r = await fetch(searchUrl, { headers: { "User-Agent": "moodverse-harvester/1.0" } });
+      if (r.ok) {
+        const j = await r.json();
+        docs = j?.response?.docs ?? [];
+      }
+    } catch { /* skip lang */ }
+    if (!docs.length) { await setCursor(supabase, "internetarchive", lang, "1"); continue; }
+
+    for (const doc of docs) {
+      if (taken >= perLang) break;
+      const id = doc.identifier;
+      if (!id) continue;
+      try {
+        const mr = await fetch(`https://archive.org/metadata/${encodeURIComponent(id)}`);
+        if (!mr.ok) continue;
+        const meta = await mr.json();
+        const txt = (meta?.files ?? []).find((f: any) =>
+          typeof f.name === "string" && /\.txt$/i.test(f.name) && !/_meta|_chocr|_djvu\.xml/i.test(f.name));
+        if (!txt) continue;
+        const tr = await fetch(`https://archive.org/download/${encodeURIComponent(id)}/${encodeURIComponent(txt.name)}`);
+        if (!tr.ok) continue;
+        const raw = (await tr.text()).slice(0, 400000);
+        const paras = raw.split(/\n\s*\n/).map((p) => p.replace(/\s+/g, " ").trim())
+          .filter((p) => p.length > 220 && p.length < 1600 && !/archive\.org|scanned|OCR|digitized/i.test(p));
+        const author = Array.isArray(doc.creator) ? doc.creator[0] : (doc.creator ?? "Unknown");
+        const title = doc.title ?? id;
+        paras.slice(0, 5).forEach((text, i) => {
+          pieces.push({
+            text,
+            author: String(author).slice(0, 200),
+            title: String(title).slice(0, 200),
+            source_type: "book",
+            language: lang,
+            year: typeof doc.year === "number" ? doc.year : undefined,
+            emotions_tags: tagEmotions(text),
+            external_id: `ia:${id}:${i}`.slice(0, 200),
+          });
+          taken++;
+        });
+      } catch { /* skip item */ }
+    }
+    await setCursor(supabase, "internetarchive", lang, String(page + 1));
+  }
+  return pieces;
+}
+
 // ---------- Embedding (Lovable AI Gateway) ----------
 async function embed(text: string, apiKey: string): Promise<number[] | null> {
   try {
@@ -545,7 +693,8 @@ serve(async (req) => {
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
     const url = new URL(req.url);
-    const sources = (url.searchParams.get("sources") ?? "poetrydb,gutendex,wikisource,wikiquote,standardebooks,firecrawl").split(",");
+    const sources = (url.searchParams.get("sources") ??
+      "poetrydb,gutendex,wikisource,wikiquote,standardebooks,quotable,poemist,internetarchive,firecrawl").split(",");
     const limitPerSource = parseInt(url.searchParams.get("limit") ?? "300", 10);
     const langs = (url.searchParams.get("langs") ?? "ru,en,hy,fr,de,es").split(",");
     const doEmbed = url.searchParams.get("embed") !== "0" && !!LOVABLE_API_KEY;
@@ -556,14 +705,30 @@ serve(async (req) => {
     if (sources.includes("wikisource")) all.push(...await fetchWikisource(supabase, limitPerSource, langs));
     if (sources.includes("wikiquote")) all.push(...await fetchWikiquote(supabase, limitPerSource, langs));
     if (sources.includes("standardebooks")) all.push(...await fetchStandardEbooks(limitPerSource));
+    if (sources.includes("quotable")) all.push(...await fetchQuotable(supabase, limitPerSource));
+    if (sources.includes("poemist")) all.push(...await fetchPoemist(limitPerSource));
+    if (sources.includes("internetarchive")) all.push(...await fetchInternetArchive(supabase, limitPerSource, langs));
     if (sources.includes("firecrawl")) all.push(...await fetchFirecrawl(supabase, limitPerSource, langs));
 
-    // Dedup by external_id against DB
-    const ids = all.map((p) => p.external_id);
-    const { data: have } = await supabase
-      .from("literary_works").select("external_id").in("external_id", ids);
-    const seen = new Set((have ?? []).map((r: any) => r.external_id));
-    const fresh = all.filter((p) => !seen.has(p.external_id));
+    // Uniqueness in DB is (source_type, external_id) — dedup on the same composite key.
+    const localSeen = new Set<string>();
+    const unique = all.filter((p) => {
+      const k = `${p.source_type}::${p.external_id}`;
+      if (localSeen.has(k)) return false;
+      localSeen.add(k);
+      return true;
+    });
+
+    // Dedup by external_id against DB (chunked — a single .in() with hundreds of long ids overflows the URL)
+    const seen = new Set<string>();
+    const ids = unique.map((p) => p.external_id);
+    for (let i = 0; i < ids.length; i += 50) {
+      const { data: have, error } = await supabase
+        .from("literary_works").select("external_id, source_type").in("external_id", ids.slice(i, i + 50));
+      if (error) { console.error("dedup lookup", error); continue; }
+      for (const r of have ?? []) seen.add(`${r.source_type}::${r.external_id}`);
+    }
+    const fresh = unique.filter((p) => !seen.has(`${p.source_type}::${p.external_id}`));
 
     let inserted = 0, failed = 0;
     for (let i = 0; i < fresh.length; i += 25) {
@@ -578,8 +743,13 @@ serve(async (req) => {
         };
       }));
       const { error, data } = await supabase.from("literary_works").insert(rows).select("id");
-      if (error) { console.error("insert", error); failed += chunk.length; }
-      else inserted += data?.length ?? 0;
+      if (!error) { inserted += data?.length ?? 0; continue; }
+      // Fall back to row-by-row so one bad/duplicate row doesn't kill the whole chunk.
+      for (const row of rows) {
+        const { error: e1 } = await supabase.from("literary_works").insert(row);
+        if (e1) { if (e1.code !== "23505") console.error("insert", e1); failed++; }
+        else inserted++;
+      }
     }
 
     return new Response(JSON.stringify({
