@@ -521,59 +521,81 @@ async function fetchFirecrawl(supabase: any, limit: number, languages: string[])
   return pieces;
 }
 
-// ---------- Source: Quotable.io (curated quotes, EN) ----------
+// ---------- Source: quote APIs (ZenQuotes + FreeAPI curated quotes, EN) ----------
 async function fetchQuotable(supabase: any, limit: number): Promise<Piece[]> {
   const pieces: Piece[] = [];
-  const prev = await getCursor(supabase, "quotable", "all");
-  let page = prev ? (parseInt(prev, 10) || 1) : 1;
-  const maxPages = Math.max(1, Math.ceil(limit / 100));
-  for (let i = 0; i < maxPages; i++) {
+
+  // ZenQuotes — 50 random curated quotes per call.
+  const rounds = Math.min(4, Math.max(1, Math.ceil(limit / 50)));
+  for (let i = 0; i < rounds; i++) {
     try {
-      const r = await fetch(`https://api.quotable.io/quotes?limit=100&page=${page}`);
+      const r = await fetch("https://zenquotes.io/api/quotes");
+      if (!r.ok) break;
+      const arr = await r.json();
+      if (!Array.isArray(arr)) break;
+      for (const q of arr) {
+        const text = (q.q ?? "").toString().trim();
+        const author = (q.a ?? "Unknown").toString().trim();
+        if (text.length < 40 || /zenquotes/i.test(text)) continue;
+        pieces.push({
+          text, author, source_type: "quote", language: "en",
+          emotions_tags: tagEmotions(text),
+          external_id: `zenquotes:${author}:${text.slice(0, 60)}`.slice(0, 200),
+        });
+      }
+    } catch { break; }
+  }
+
+  // FreeAPI quotes — paginated catalogue, cursor keeps position between runs.
+  const prev = await getCursor(supabase, "quotable", "freeapi");
+  let page = prev ? (parseInt(prev, 10) || 1) : 1;
+  for (let i = 0; i < 3 && pieces.length < limit * 2; i++) {
+    try {
+      const r = await fetch(`https://api.freeapi.app/api/v1/public/quotes?page=${page}&limit=50`);
       if (!r.ok) break;
       const j = await r.json();
-      const results = j?.results ?? [];
-      if (!results.length) { page = 1; break; }
-      for (const q of results) {
+      const items = j?.data?.data ?? [];
+      if (!items.length) { page = 1; break; }
+      for (const q of items) {
         const text = (q.content ?? "").toString().trim();
         if (text.length < 40) continue;
         pieces.push({
           text,
-          author: q.author ?? "Unknown",
-          source_type: "quote",
-          language: "en",
+          author: (q.author ?? "Unknown").toString(),
+          source_type: "quote", language: "en",
           emotions_tags: tagEmotions(text),
-          external_id: `quotable:${q._id}`,
+          external_id: `freeapiquote:${q._id ?? text.slice(0, 60)}`.slice(0, 200),
         });
       }
-      page = j?.totalPages && page >= j.totalPages ? 1 : page + 1;
+      page = j?.data?.nextPage ? page + 1 : 1;
     } catch { break; }
   }
-  await setCursor(supabase, "quotable", "all", String(page));
+  await setCursor(supabase, "quotable", "freeapi", String(page));
+
   return pieces.slice(0, limit);
 }
 
-// ---------- Source: Poemist (random world poetry, EN) ----------
+// ---------- Source: PoetryDB random (fresh world poetry each run) ----------
 async function fetchPoemist(limit: number): Promise<Piece[]> {
   const pieces: Piece[] = [];
-  const rounds = Math.min(12, Math.max(1, Math.ceil(limit / 5)));
+  const rounds = Math.min(6, Math.max(1, Math.ceil(limit / 20)));
   for (let i = 0; i < rounds; i++) {
     try {
-      const r = await fetch("https://www.poemist.com/api/v1/randompoems");
+      const r = await fetch("https://poetrydb.org/random/20");
       if (!r.ok) break;
       const arr = await r.json();
       if (!Array.isArray(arr)) break;
       for (const p of arr) {
-        const text = (p.content ?? "").toString().trim();
+        const text = (p.lines ?? []).join("\n").trim();
         if (text.length < 100) continue;
         pieces.push({
           text: text.slice(0, 4000),
-          author: p.poet?.name ?? "Unknown",
+          author: p.author ?? "Unknown",
           title: p.title ?? undefined,
           source_type: "poem",
           language: "en",
           emotions_tags: tagEmotions(text),
-          external_id: `poemist:${(p.title ?? "").slice(0, 80)}:${(p.poet?.name ?? "").slice(0, 60)}`.slice(0, 200),
+          external_id: `poetrydb:${p.author}:${p.title}`.slice(0, 200),
         });
       }
     } catch { break; }
