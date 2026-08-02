@@ -718,11 +718,15 @@ serve(async (req) => {
       return true;
     });
 
-    // Dedup by external_id against DB
+    // Dedup by external_id against DB (chunked — a single .in() with hundreds of long ids overflows the URL)
+    const seen = new Set<string>();
     const ids = unique.map((p) => p.external_id);
-    const { data: have } = await supabase
-      .from("literary_works").select("external_id").in("external_id", ids);
-    const seen = new Set((have ?? []).map((r: any) => r.external_id));
+    for (let i = 0; i < ids.length; i += 50) {
+      const { data: have, error } = await supabase
+        .from("literary_works").select("external_id").in("external_id", ids.slice(i, i + 50));
+      if (error) { console.error("dedup lookup", error); continue; }
+      for (const r of have ?? []) seen.add(r.external_id);
+    }
     const fresh = unique.filter((p) => !seen.has(p.external_id));
 
     let inserted = 0, failed = 0;
@@ -737,7 +741,9 @@ serve(async (req) => {
           external_id: p.external_id, embedding: embedding as any,
         };
       }));
-      const { error, data } = await supabase.from("literary_works").insert(rows).select("id");
+      const { error, data } = await supabase.from("literary_works")
+        .upsert(rows, { onConflict: "source_type,external_id", ignoreDuplicates: true })
+        .select("id");
       if (error) { console.error("insert", error); failed += chunk.length; }
       else inserted += data?.length ?? 0;
     }
