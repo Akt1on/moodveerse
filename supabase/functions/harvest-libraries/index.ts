@@ -742,7 +742,7 @@ async function fetchWikiRandom(supabase: any, limit: number, languages: string[]
             const ids = candidates.slice(0, 20).map((c: any) => c.id).join("|");
             const exUrl = `${host}?action=query&format=json&origin=*&prop=extracts&explaintext=1&exlimit=20&pageids=${ids}`;
             const er = await fetch(exUrl, { headers: { "User-Agent": "moodverse-harvester/1.0 (contact: moodverse)" } });
-            if (!er.ok) { console.log("wiki extracts http", lang, site, er.status); continue; }
+            if (!er.ok) continue;
             const ej = await er.json();
             for (const pg of Object.values(ej?.query?.pages ?? {}) as any[]) {
               const raw = (pg?.extract ?? "").toString();
@@ -750,7 +750,7 @@ async function fetchWikiRandom(supabase: any, limit: number, languages: string[]
               const block = pickWikiBlock(raw.replace(/\[\d+\]/g, ""));
               if (block) pages.push({ pageid: pg.pageid, title: pg.title, extract: block });
             }
-          } catch (e) { console.log("wiki batch err", lang, site, String(e).slice(0, 120)); }
+          } catch { /* skip batch */ }
           if (!pages.length) continue;
           for (const pg of pages) {
             if (taken >= perLang) break;
