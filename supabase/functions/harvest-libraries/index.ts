@@ -670,6 +670,178 @@ async function fetchInternetArchive(supabase: any, limit: number, languages: str
 }
 
 // ---------- Embedding (Lovable AI Gateway) ----------
+// ---------- Rendered-HTML cleaner (extracts API returns empty text for template-built poem pages) ----------
+function wikiHtmlToText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<sup[\s\S]*?<\/sup>/gi, "")
+    .replace(/<table[\s\S]*?<\/table>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h\d)>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&#160;|&nbsp;/g, " ")
+    .replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+const WIKI_NOISE = /Источник:|Википроекты|Дата создания|Retrieved from|Материал из|редактировать|Категория:/i;
+
+function pickWikiBlock(text: string): string | null {
+  const blocks = text.split(/\n\s*\n/).map((b) => b.trim())
+    .filter((b) => b.length > 60 && b.length < 2400 && !WIKI_NOISE.test(b) && !/^\*\s*\*\s*\*$/.test(b));
+  if (!blocks.length) return null;
+  return blocks.sort((a, b) => b.length - a.length)[0];
+}
+
+// ---------- Source: Wiki search (Wikisource + Wikiquote literary search, 6 languages) ----------
+const WIKI_QUERIES: Record<string, string[]> = {
+  ru: ["стихотворение любовь", "стихотворение осень печаль", "элегия", "поэма надежда", "монолог"],
+  hy: ["բանաստեղծություն", "սեր բանաստեղծություն", "էլեգիա"],
+  en: ["poem love", "sonnet sorrow", "elegy hope", "verse solitude"],
+  fr: ["poème amour", "sonnet tristesse"],
+  de: ["Gedicht Liebe", "Gedicht Sehnsucht"],
+  es: ["poema amor", "poema soledad"],
+};
+
+async function fetchWikiRandom(supabase: any, limit: number, languages: string[]): Promise<Piece[]> {
+  const pieces: Piece[] = [];
+  const sites = ["wikisource", "wikiquote"];
+  const perLang = Math.max(10, Math.floor(limit / Math.max(1, languages.length * sites.length)));
+
+  for (const lang of languages) {
+    const queries = WIKI_QUERIES[lang];
+    if (!queries) continue;
+    for (const site of sites) {
+      let taken = 0;
+      const host = `https://${lang}.${site}.org/w/api.php`;
+      // Cursor rotates the offset so each run reaches deeper into the result set.
+      const prev = await getCursor(supabase, "wikisearch", `${lang}:${site}`);
+      let offset = prev ? (parseInt(prev, 10) || 0) : 0;
+      for (const query of queries) {
+        if (taken >= perLang) break;
+        try {
+          const listUrl = `${host}?action=query&format=json&origin=*&list=search` +
+            `&srsearch=${encodeURIComponent(query)}&srnamespace=0&srlimit=20&sroffset=${offset}`;
+          const lr = await fetch(listUrl, { headers: { "User-Agent": "moodverse-harvester/1.0" } });
+          if (!lr.ok) break;
+          const lj = await lr.json();
+          // Skip encyclopedia/index subpages — they are reference entries, not literature.
+          const candidates: any[] = (lj?.query?.search ?? [])
+            .map((p: any) => ({ id: p.pageid, title: p.title }))
+            .filter((p: any) =>
+            typeof p.title === "string" && !p.title.includes("/") && !/^(Страница|Индекс|Page|Index)[:\s]/i.test(p.title));
+          if (!candidates.length) continue;
+          // Render the page — extracts is empty for template-built literary pages, wikitext hides text in templates.
+          const pages: any[] = [];
+          for (const c of candidates) {
+            if (pages.length >= perLang - taken) break;
+            // Wikimedia throttles rapid sequential requests — pace them.
+            await new Promise((res) => setTimeout(res, 200));
+            try {
+              const er = await fetch(
+                `${host}?action=parse&format=json&origin=*&pageid=${c.id}&prop=text`,
+                { headers: { "User-Agent": "moodverse-harvester/1.0" } });
+              if (!er.ok) { console.log("wiki parse http", lang, site, er.status); continue; }
+              const ej = await er.json();
+              const html = ej?.parse?.text?.["*"];
+              if (!html) { console.log("wiki parse nohtml", lang, site, c.title); continue; }
+              const cleaned = wikiHtmlToText(String(html));
+              const block = pickWikiBlock(cleaned);
+              if (!block) console.log("wiki noblock", lang, site, c.title, cleaned.length);
+              if (block) pages.push({ pageid: c.id, title: c.title, extract: block });
+            } catch (e) { console.log("wiki page err", lang, site, String(e).slice(0, 120)); }
+          }
+          if (!pages.length) continue;
+          for (const pg of pages) {
+            if (taken >= perLang) break;
+            const block: string = (pg.extract ?? "").toString();
+            if (!block) continue;
+            const rawTitle: string = (pg.title ?? "").toString();
+            const m = rawTitle.match(/^(.*?)\s*\((.+)\)\s*$/);
+            const title = (m ? m[1] : rawTitle).slice(0, 200);
+            const author = (m ? m[2] : rawTitle).slice(0, 200);
+            pieces.push({
+              text: block.slice(0, 4000),
+              author,
+              title,
+              source_type: site === "wikiquote" ? "quote" : "poem",
+              language: lang,
+              emotions_tags: tagEmotions(block),
+              external_id: `${site}srch:${lang}:${pg.pageid}`.slice(0, 200),
+            });
+            taken++;
+          }
+        } catch { break; }
+      }
+      offset = offset + 20 > 400 ? 0 : offset + 20;
+      await setCursor(supabase, "wikisearch", `${lang}:${site}`, String(offset));
+    }
+  }
+  return pieces.slice(0, limit);
+}
+
+// ---------- Source: Open Library / Gutenberg full-text prose passages ----------
+async function fetchOpenLibrary(supabase: any, limit: number, languages: string[]): Promise<Piece[]> {
+  const OL_LANG: Record<string, string> = { ru: "rus", en: "eng", hy: "arm", fr: "fre", de: "ger", es: "spa" };
+  const pieces: Piece[] = [];
+  const perLang = Math.max(8, Math.floor(limit / Math.max(1, languages.length)));
+
+  for (const lang of languages) {
+    const ol = OL_LANG[lang];
+    if (!ol) continue;
+    const prev = await getCursor(supabase, "openlibrary", lang);
+    const page = prev ? (parseInt(prev, 10) || 1) : 1;
+    let taken = 0;
+    try {
+      const searchUrl = `https://openlibrary.org/search.json?q=${encodeURIComponent("subject:poetry OR subject:literature")}` +
+        `&language=${ol}&has_fulltext=true&page=${page}&limit=20&fields=title,author_name,first_publish_year,ia`;
+      const r = await fetch(searchUrl, { headers: { "User-Agent": "moodverse-harvester/1.0" } });
+      if (!r.ok) { await setCursor(supabase, "openlibrary", lang, "1"); continue; }
+      const j = await r.json();
+      const docs: any[] = j?.docs ?? [];
+      for (const d of docs) {
+        if (taken >= perLang) break;
+        const iaId = Array.isArray(d.ia) ? d.ia[0] : undefined;
+        if (!iaId) continue;
+        try {
+          const mr = await fetch(`https://archive.org/metadata/${encodeURIComponent(iaId)}`);
+          if (!mr.ok) continue;
+          const meta = await mr.json();
+          const txt = (meta?.files ?? []).find((f: any) =>
+            typeof f.name === "string" && /\.txt$/i.test(f.name) && !/_meta|_chocr|_djvu\.xml/i.test(f.name));
+          if (!txt) continue;
+          const tr = await fetch(`https://archive.org/download/${encodeURIComponent(iaId)}/${encodeURIComponent(txt.name)}`);
+          if (!tr.ok) continue;
+          const raw = (await tr.text()).slice(0, 300000);
+          const paras = raw.split(/\n\s*\n/)
+            .map((p) => p.replace(/\s+/g, " ").trim())
+            .filter((p) => p.length > 220 && p.length < 1600 && !/archive\.org|scanned|OCR|digitized/i.test(p));
+          const author = Array.isArray(d.author_name) ? d.author_name[0] : "Unknown";
+          paras.slice(0, 4).forEach((text, i) => {
+            pieces.push({
+              text,
+              author: String(author).slice(0, 200),
+              title: String(d.title ?? iaId).slice(0, 200),
+              source_type: "book",
+              language: lang,
+              year: typeof d.first_publish_year === "number" ? d.first_publish_year : undefined,
+              emotions_tags: tagEmotions(text),
+              external_id: `ol:${iaId}:${i}`.slice(0, 200),
+            });
+            taken++;
+          });
+        } catch { /* skip item */ }
+      }
+    } catch { /* skip lang */ }
+    await setCursor(supabase, "openlibrary", lang, String(page + 1));
+  }
+  return pieces.slice(0, limit);
+}
+
 async function embed(text: string, apiKey: string): Promise<number[] | null> {
   try {
     const r = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
@@ -694,7 +866,7 @@ serve(async (req) => {
 
     const url = new URL(req.url);
     const sources = (url.searchParams.get("sources") ??
-      "poetrydb,gutendex,wikisource,wikiquote,standardebooks,quotable,poemist,internetarchive,firecrawl").split(",");
+      "poetrydb,gutendex,wikisource,wikiquote,standardebooks,quotable,poemist,internetarchive,wikirandom,openlibrary,firecrawl").split(",");
     const limitPerSource = parseInt(url.searchParams.get("limit") ?? "300", 10);
     const langs = (url.searchParams.get("langs") ?? "ru,en,hy,fr,de,es").split(",");
     const doEmbed = url.searchParams.get("embed") !== "0" && !!LOVABLE_API_KEY;
@@ -708,6 +880,8 @@ serve(async (req) => {
     if (sources.includes("quotable")) all.push(...await fetchQuotable(supabase, limitPerSource));
     if (sources.includes("poemist")) all.push(...await fetchPoemist(limitPerSource));
     if (sources.includes("internetarchive")) all.push(...await fetchInternetArchive(supabase, limitPerSource, langs));
+    if (sources.includes("wikirandom")) all.push(...await fetchWikiRandom(supabase, limitPerSource, langs));
+    if (sources.includes("openlibrary")) all.push(...await fetchOpenLibrary(supabase, limitPerSource, langs));
     if (sources.includes("firecrawl")) all.push(...await fetchFirecrawl(supabase, limitPerSource, langs));
 
     // Uniqueness in DB is (source_type, external_id) — dedup on the same composite key.
