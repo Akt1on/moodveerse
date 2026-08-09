@@ -740,14 +740,17 @@ async function fetchWikiRandom(supabase: any, limit: number, languages: string[]
           for (const c of candidates) {
             if (pages.length >= perLang - taken) break;
             // Wikimedia throttles rapid sequential requests — pace them.
-            await new Promise((res) => setTimeout(res, 200));
+            await new Promise((res) => setTimeout(res, 300));
             try {
-              const er = await fetch(
-                `${host}?action=parse&format=json&origin=*&pageid=${c.id}&prop=text`,
-                { headers: { "User-Agent": "moodverse-harvester/1.0" } });
-              if (!er.ok) { console.log("wiki parse http", lang, site, er.status); continue; }
-              const ej = await er.json();
-              const html = ej?.parse?.text?.["*"];
+              // REST v1 page HTML is CDN-cached and far less rate-limited than action=parse.
+              const restUrl = `https://${lang}.${site}.org/api/rest_v1/page/html/${encodeURIComponent(c.title)}`;
+              let er = await fetch(restUrl, { headers: { "User-Agent": "moodverse-harvester/1.0 (contact: moodverse)" } });
+              if (er.status === 429) {
+                await new Promise((res) => setTimeout(res, 2000));
+                er = await fetch(restUrl, { headers: { "User-Agent": "moodverse-harvester/1.0 (contact: moodverse)" } });
+              }
+              if (!er.ok) { console.log("wiki rest http", lang, site, er.status); continue; }
+              const html = await er.text();
               if (!html) { console.log("wiki parse nohtml", lang, site, c.title); continue; }
               const cleaned = wikiHtmlToText(String(html));
               const block = pickWikiBlock(cleaned);
