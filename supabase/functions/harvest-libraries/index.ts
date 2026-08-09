@@ -735,29 +735,22 @@ async function fetchWikiRandom(supabase: any, limit: number, languages: string[]
             .filter((p: any) =>
             typeof p.title === "string" && !p.title.includes("/") && !/^(Страница|Индекс|Page|Index)[:\s]/i.test(p.title));
           if (!candidates.length) continue;
-          // Render the page — extracts is empty for template-built literary pages, wikitext hides text in templates.
+          // One batched extracts request per 20 pages — per-page requests get 429-ed by Wikimedia.
           const pages: any[] = [];
-          for (const c of candidates) {
-            if (pages.length >= perLang - taken) break;
-            // Wikimedia throttles rapid sequential requests — pace them.
-            await new Promise((res) => setTimeout(res, 300));
-            try {
-              // REST v1 page HTML is CDN-cached and far less rate-limited than action=parse.
-              const restUrl = `https://${lang}.${site}.org/api/rest_v1/page/html/${encodeURIComponent(c.title)}`;
-              let er = await fetch(restUrl, { headers: { "User-Agent": "moodverse-harvester/1.0 (contact: moodverse)" } });
-              if (er.status === 429) {
-                await new Promise((res) => setTimeout(res, 2000));
-                er = await fetch(restUrl, { headers: { "User-Agent": "moodverse-harvester/1.0 (contact: moodverse)" } });
-              }
-              if (!er.ok) { console.log("wiki rest http", lang, site, er.status); continue; }
-              const html = await er.text();
-              if (!html) { console.log("wiki parse nohtml", lang, site, c.title); continue; }
-              const cleaned = wikiHtmlToText(String(html));
-              const block = pickWikiBlock(cleaned);
-              if (!block) console.log("wiki noblock", lang, site, c.title, cleaned.length);
-              if (block) pages.push({ pageid: c.id, title: c.title, extract: block });
-            } catch (e) { console.log("wiki page err", lang, site, String(e).slice(0, 120)); }
-          }
+          await new Promise((res) => setTimeout(res, 400));
+          try {
+            const ids = candidates.slice(0, 20).map((c: any) => c.id).join("|");
+            const exUrl = `${host}?action=query&format=json&origin=*&prop=extracts&explaintext=1&exlimit=20&pageids=${ids}`;
+            const er = await fetch(exUrl, { headers: { "User-Agent": "moodverse-harvester/1.0 (contact: moodverse)" } });
+            if (!er.ok) { console.log("wiki extracts http", lang, site, er.status); continue; }
+            const ej = await er.json();
+            for (const pg of Object.values(ej?.query?.pages ?? {}) as any[]) {
+              const raw = (pg?.extract ?? "").toString();
+              if (!raw) continue;
+              const block = pickWikiBlock(raw.replace(/\[\d+\]/g, ""));
+              if (block) pages.push({ pageid: pg.pageid, title: pg.title, extract: block });
+            }
+          } catch (e) { console.log("wiki batch err", lang, site, String(e).slice(0, 120)); }
           if (!pages.length) continue;
           for (const pg of pages) {
             if (taken >= perLang) break;
