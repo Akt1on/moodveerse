@@ -12,7 +12,7 @@ type: feature
    - Quotable.io (https://api.quotable.io) — curated quotes.
    - Open Library API — book metadata enrichment.
    - API-Ninjas Quotes — themed quotes by category.
-4. **AI re-rank & curate** with google/gemini-2.5-pro: feed candidates from steps 2+3 to the model. It returns candidate indexes only; server code reconstructs every result from the database so text/author/title cannot be fabricated or altered. Return 3–6 strong matches (minimum score 72), never pad to a fixed count.
+4. **AI re-rank & curate** with a strong Gemini model: feed candidates from steps 2+3 to the model. It returns candidate indexes only; server code reconstructs every result from the database so text/author/title cannot be fabricated or altered. Return 3–6 strong matches (minimum score 72), never pad to a fixed count.
 5. **AI stylization fallback** ONLY if too few real candidates resonate — generate "in the spirit of [author]" pieces, marked `is_original: true`.
 
 **Caching:** cache external API responses by query hash for ~24h to save quota.
