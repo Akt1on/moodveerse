@@ -8,16 +8,19 @@ const corsHeaders = {
 
 const SYSTEM_PROMPT = `Ты — глубоко эмпатичный литературный собеседник, знаток мировой, русской и армянской поэзии, прозы и кино (Нарекаци, Туманян, Чаренц, Терьян, Севак, Исаакян, Капутикян, Сароян, Параджанов, Эгоян, Азнавур, Пушкин, Цветаева, Ахматова, Бродский, Рильке, Тарковский и др.).
 
-Твоя задача — выбрать из списка КАНДИДАТЫ 6–8 произведений, которые точнее всего резонируют с состоянием человека, и для каждого написать тёплое личное объяснение на русском.
+Твоя задача — выбрать из списка КАНДИДАТЫ только произведения, которые действительно и непосредственно резонируют с состоянием человека, и для каждого написать тёплое личное объяснение на русском.
 
 ЖЕЛЕЗНЫЕ ПРАВИЛА:
-- Используй ТОЛЬКО реальные работы из списка кандидатов. Не выдумывай.
-- Сохраняй текст отрывка ТОЧНО как в кандидате.
-- Глубокий эмоциональный резонанс важнее ключевых слов.
+- Возвращай ТОЛЬКО idx из списка кандидатов. Не выдумывай произведения и не переписывай их текст.
+- Сначала сформулируй внутреннюю эмоциональную тему запроса: событие, чувство, внутренний конфликт и нужное направление отклика.
+- Глубокий эмоциональный и ситуационный резонанс важнее совпадения отдельных слов.
+- Не выбирай кандидата только потому, что в нём встречается слово из запроса.
+- Если связь нельзя ясно объяснить через конкретный образ или смысл самого отрывка — отклони кандидата.
+- Лучше вернуть 3 сильных результата, чем 8 слабых. Допустимо 3–6 результатов.
 - Баланс: что-то признающее боль, что-то утешающее, что-то с лучом надежды.
-- Микс источников: поэзия + проза + кино/афоризм. Если есть армянские — включи хотя бы одно.
+- Разнообразие источников вторично и не должно снижать релевантность.
 - explanation: тёплое, на «вы», 1–2 предложения.
-- relevance_score: 70–99.`;
+- relevance_score: честная оценка 0–100; выбирай только кандидатов с оценкой не ниже 72.`;
 
 type Candidate = {
   id?: string;
@@ -28,8 +31,18 @@ type Candidate = {
   year?: number | null;
   language?: string;
   score?: number;
-  origin: "lexical" | "vector" | "hybrid" | "random";
+  origin: "lexical" | "vector" | "hybrid";
 };
+
+function normalizeScores(items: Candidate[]): void {
+  if (!items.length) return;
+  const values = items.map((item) => item.score ?? 0);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  for (const item of items) {
+    item.score = max === min ? 1 : ((item.score ?? 0) - min) / (max - min);
+  }
+}
 
 async function embedQuery(text: string, apiKey: string): Promise<number[] | null> {
   try {
@@ -49,7 +62,7 @@ serve(async (req) => {
 
   try {
     const { input_text, emotions = [], intensity, context, language_pref } = await req.json();
-    if (!input_text || typeof input_text !== "string" || input_text.trim().length < 3) {
+    if (!input_text || typeof input_text !== "string" || input_text.trim().length < 3 || input_text.length > 4000) {
       return new Response(JSON.stringify({ error: "Опишите чувство подробнее" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -99,82 +112,69 @@ serve(async (req) => {
     }
 
     const lang = (language_pref && ["ru", "hy", "en"].includes(language_pref)) ? language_pref : null;
-    const lowerEmotions = emotions.map((e: string) => e.toLowerCase());
-    const queryText = [input_text, ...emotions, context].filter(Boolean).join(" ");
+    const safeEmotions = Array.isArray(emotions)
+      ? emotions.filter((e): e is string => typeof e === "string").slice(0, 12)
+      : [];
+    const lowerEmotions = safeEmotions.map((e) => e.toLowerCase().trim()).filter(Boolean);
+    const safeContext = typeof context === "string" ? context.slice(0, 1500) : "";
+    const queryText = `Состояние: ${input_text.trim()}\nЭмоции: ${safeEmotions.join(", ")}\nКонтекст: ${safeContext}`;
 
-    // Hybrid retrieval: embed query, then run vector + lexical + random in parallel.
+    // Hybrid retrieval: semantic search is primary; lexical search adds precision.
     const queryEmbedding = await embedQuery(queryText, LOVABLE_API_KEY);
 
-    const [vecResp, lexResp, randResp] = await Promise.all([
+    const [vecResp, lexResp] = await Promise.all([
       queryEmbedding
         ? supabase.rpc("match_literary_works", {
             query_embedding: queryEmbedding as any,
-            match_count: 20,
+            match_count: 40,
             filter_language: lang,
             filter_emotions: lowerEmotions.length ? lowerEmotions : null,
-            similarity_threshold: 0.0,
+            similarity_threshold: 0.20,
           })
         : Promise.resolve({ data: null, error: null } as any),
       supabase.rpc("match_literary_lexical", {
         query_text: queryText,
         query_emotions: lowerEmotions.length ? lowerEmotions : null,
         preferred_language: lang,
-        match_count: 20,
+        match_count: 30,
       }),
-      supabase.from("literary_works").select("id,text,author,title,source_type,year,language").limit(8),
     ]);
 
     const candidates: Candidate[] = [];
     const seen = new Map<string, Candidate>();
 
-    // Vector hits first — highest-quality signal
-    if (vecResp?.data && Array.isArray(vecResp.data)) {
-      for (const d of vecResp.data as any[]) {
-        if (seen.has(d.id)) continue;
-        const c: Candidate = {
-          id: d.id, text: d.text, author: d.author, title: d.title,
-          source_type: d.source_type, year: d.year, language: d.language,
-          score: d.similarity ?? d.score, origin: "vector",
-        };
-        seen.set(d.id, c);
-        candidates.push(c);
-      }
-    } else if (vecResp?.error) {
+    const vectorCandidates: Candidate[] = ((vecResp?.data as any[]) ?? []).map((d) => ({
+      id: d.id, text: d.text, author: d.author, title: d.title,
+      source_type: d.source_type, year: d.year, language: d.language,
+      score: d.similarity ?? 0, origin: "vector" as const,
+    }));
+    const lexicalCandidates: Candidate[] = ((lexResp?.data as any[]) ?? []).map((d) => ({
+      id: d.id, text: d.text, author: d.author, title: d.title,
+      source_type: d.source_type, year: d.year, language: d.language,
+      score: d.score ?? 0, origin: "lexical" as const,
+    }));
+    normalizeScores(vectorCandidates);
+    normalizeScores(lexicalCandidates);
+
+    if (vecResp?.error) {
       console.error("vector rpc error", vecResp.error);
     }
-
-    if (lexResp.data && Array.isArray(lexResp.data)) {
-      for (const d of lexResp.data as any[]) {
-        const existing = seen.get(d.id);
+    for (const item of vectorCandidates) {
+      item.score = (item.score ?? 0) * 0.72;
+      if (item.id) seen.set(item.id, item);
+      candidates.push(item);
+    }
+    if (lexResp.error) console.error("lexical rpc error", lexResp.error);
+    for (const item of lexicalCandidates) {
+        const existing = item.id ? seen.get(item.id) : undefined;
         if (existing) {
-          // Intersection: piece found by both vector + lexical is a strong signal
           existing.origin = "hybrid";
-          existing.score = (existing.score ?? 0) + (d.score ?? 0) * 0.5 + 0.15;
+          existing.score = (existing.score ?? 0) + (item.score ?? 0) * 0.28 + 0.18;
           continue;
         }
-        const c: Candidate = {
-          id: d.id, text: d.text, author: d.author, title: d.title,
-          source_type: d.source_type, year: d.year, language: d.language,
-          score: d.score, origin: "lexical",
-        };
-        seen.set(d.id, c);
-        candidates.push(c);
-      }
-    } else if (lexResp.error) {
-      console.error("lexical rpc error", lexResp.error);
-    }
-
-    if (randResp.data && Array.isArray(randResp.data)) {
-      for (const d of randResp.data as any[]) {
-        if (seen.has(d.id)) continue;
-        const c: Candidate = {
-          id: d.id, text: d.text, author: d.author, title: d.title,
-          source_type: d.source_type, year: d.year, language: d.language,
-          origin: "random",
-        };
-        seen.set(d.id, c);
-        candidates.push(c);
-      }
+        item.score = (item.score ?? 0) * 0.28;
+        if (item.id) seen.set(item.id, item);
+        candidates.push(item);
     }
 
     // Rank by score (hybrid gets bonus baked in), then trim
@@ -186,18 +186,20 @@ serve(async (req) => {
       }), { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // Trim payload for AI (max 24 candidates, ~800 char text each).
-    const candidatesPayload = candidates.slice(0, 24).map((c, i) => ({
+    // A larger semantic pool gives the curator genuine alternatives without random filler.
+    const pool = candidates.slice(0, 32);
+    const candidatesPayload = pool.map((c, i) => ({
       idx: i, author: c.author, title: c.title || null, source_type: c.source_type,
       year: c.year ?? null, language: c.language ?? "ru",
-      text: c.text.slice(0, 800),
+      retrieval_signal: c.origin,
+      text: c.text.slice(0, 1200),
     }));
 
     const userPrompt = `СОСТОЯНИЕ ПОЛЬЗОВАТЕЛЯ:
 "${input_text}"
-Эмоции: ${emotions.length ? emotions.join(", ") : "не указаны"}
+Эмоции: ${safeEmotions.length ? safeEmotions.join(", ") : "не указаны"}
 Интенсивность: ${intensity ?? "—"} / 10
-Контекст: ${context || "—"}
+Контекст: ${safeContext || "—"}
 Предпочтение языка: ${language_pref || "любой"}
 ${userMemory ? `\nЭМОЦИОНАЛЬНЫЙ ПРОФИЛЬ ЭТОГО ЧЕЛОВЕКА (учти, но не цитируй вслух):
 - Резюме: ${userMemory.summary || "—"}
@@ -205,7 +207,7 @@ ${userMemory ? `\nЭМОЦИОНАЛЬНЫЙ ПРОФИЛЬ ЭТОГО ЧЕЛО�
 - Доминирующие состояния: ${(userMemory.dominant_emotions || []).join(", ") || "—"}
 - Заметки куратора: ${userMemory.agent_notes || "—"}
 Используй это, чтобы избегать повторения уже знакомых ему произведений и мягко вести его дальше по эмоциональному пути.\n` : ""}
-КАНДИДАТЫ (выбери 6–8 самых резонансных, верни их text ДОСЛОВНО):
+КАНДИДАТЫ (выбери только действительно связанные с состоянием; верни их idx, не текст):
 ${JSON.stringify(candidatesPayload)}`;
 
     const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -221,7 +223,7 @@ ${JSON.stringify(candidatesPayload)}`;
           type: "function",
           function: {
             name: "return_resonant_pieces",
-            description: "Возвращает 6–8 резонансных произведений",
+            description: "Возвращает индексы только действительно резонансных произведений",
             parameters: {
               type: "object",
               properties: {
@@ -230,15 +232,11 @@ ${JSON.stringify(candidatesPayload)}`;
                   items: {
                     type: "object",
                     properties: {
-                      title: { type: "string" },
-                      author: { type: "string" },
-                      year: { type: "string" },
-                      source_type: { type: "string", enum: ["poem", "book", "film", "monologue", "quote"] },
-                      text: { type: "string" },
+                      idx: { type: "integer", minimum: 0 },
                       explanation: { type: "string" },
-                      relevance_score: { type: "number" },
+                      relevance_score: { type: "number", minimum: 0, maximum: 100 },
                     },
-                    required: ["title", "author", "source_type", "text", "explanation", "relevance_score"],
+                    required: ["idx", "explanation", "relevance_score"],
                     additionalProperties: false,
                   },
                 },
@@ -280,14 +278,40 @@ ${JSON.stringify(candidatesPayload)}`;
     }
 
     const args = JSON.parse(toolCall.function.arguments);
+    const used = new Set<number>();
+    const pieces = (Array.isArray(args.pieces) ? args.pieces : [])
+      .filter((pick: any) => Number.isInteger(pick.idx) && pick.idx >= 0 && pick.idx < pool.length)
+      .filter((pick: any) => Number(pick.relevance_score) >= 72)
+      .filter((pick: any) => {
+        if (used.has(pick.idx)) return false;
+        used.add(pick.idx);
+        return true;
+      })
+      .slice(0, 6)
+      .map((pick: any) => {
+        const candidate = pool[pick.idx];
+        return {
+          title: candidate.title || "",
+          author: candidate.author,
+          year: candidate.year ? String(candidate.year) : "",
+          source_type: candidate.source_type,
+          text: candidate.text,
+          explanation: String(pick.explanation || "").slice(0, 600),
+          relevance_score: Math.round(Number(pick.relevance_score)),
+        };
+      });
+    if (!pieces.length) {
+      return new Response(JSON.stringify({
+        error: "Не нашлось достаточно точного литературного отклика. Попробуйте описать чувство чуть подробнее.",
+      }), { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
     return new Response(JSON.stringify({
-      pieces: args.pieces || [],
+      pieces,
       meta: {
         candidates_total: candidates.length,
         from_vector: candidates.filter(c => c.origin === "vector").length,
         from_lexical: candidates.filter(c => c.origin === "lexical").length,
         from_hybrid: candidates.filter(c => c.origin === "hybrid").length,
-        from_random: candidates.filter(c => c.origin === "random").length,
         embedded_query: !!queryEmbedding,
         language_pref: language_pref || null,
         used_memory: !!userMemory,

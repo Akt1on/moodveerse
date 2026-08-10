@@ -57,7 +57,7 @@ type Candidate = {
   year?: number | null;
   language?: string;
   score?: number;
-  origin: "lexical" | "vector" | "hybrid" | "random";
+  origin: "lexical" | "vector" | "hybrid";
 };
 
 async function embedQuery(text: string, apiKey: string): Promise<number[] | null> {
@@ -139,7 +139,7 @@ serve(async (req) => {
 
   try {
     const { input_text, emotions = [], intensity, context, language_pref } = await req.json();
-    if (!input_text || typeof input_text !== "string" || input_text.trim().length < 3) {
+    if (!input_text || typeof input_text !== "string" || input_text.trim().length < 3 || input_text.length > 4000) {
       return new Response(JSON.stringify({ error: "Опишите чувство подробнее" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -189,28 +189,31 @@ serve(async (req) => {
     }
 
     const lang = (language_pref && ["ru", "hy", "en"].includes(language_pref)) ? language_pref : null;
-    const lowerEmotions = emotions.map((e: string) => e.toLowerCase());
-    const queryText = [input_text, ...emotions, context].filter(Boolean).join(" ");
+    const safeEmotions = Array.isArray(emotions)
+      ? emotions.filter((e): e is string => typeof e === "string").slice(0, 12)
+      : [];
+    const lowerEmotions = safeEmotions.map((e) => e.toLowerCase().trim()).filter(Boolean);
+    const safeContext = typeof context === "string" ? context.slice(0, 1500) : "";
+    const queryText = `Состояние: ${input_text.trim()}\nЭмоции: ${safeEmotions.join(", ")}\nКонтекст: ${safeContext}`;
 
     // Hybrid retrieval — wider pool for 5 curators
     const queryEmbedding = await embedQuery(queryText, LOVABLE_API_KEY);
-    const [vecResp, lexResp, randResp] = await Promise.all([
+    const [vecResp, lexResp] = await Promise.all([
       queryEmbedding
         ? supabase.rpc("match_literary_works", {
             query_embedding: queryEmbedding as any,
-            match_count: 24,
+            match_count: 40,
             filter_language: lang,
             filter_emotions: lowerEmotions.length ? lowerEmotions : null,
-            similarity_threshold: 0.0,
+            similarity_threshold: 0.20,
           })
         : Promise.resolve({ data: null, error: null } as any),
       supabase.rpc("match_literary_lexical", {
         query_text: queryText,
         query_emotions: lowerEmotions.length ? lowerEmotions : null,
         preferred_language: lang,
-        match_count: 24,
+        match_count: 30,
       }),
-      supabase.from("literary_works").select("id,text,author,title,source_type,year,language").limit(12),
     ]);
 
     const candidates: Candidate[] = [];
@@ -228,11 +231,6 @@ serve(async (req) => {
         continue;
       }
       const c: Candidate = { id: d.id, text: d.text, author: d.author, title: d.title, source_type: d.source_type, year: d.year, language: d.language, score: d.score, origin: "lexical" };
-      seen.set(d.id, c); candidates.push(c);
-    }
-    for (const d of (randResp.data as any[]) ?? []) {
-      if (seen.has(d.id)) continue;
-      const c: Candidate = { id: d.id, text: d.text, author: d.author, title: d.title, source_type: d.source_type, year: d.year, language: d.language, origin: "random" };
       seen.set(d.id, c); candidates.push(c);
     }
     candidates.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
@@ -253,9 +251,9 @@ serve(async (req) => {
 
     const userBlock = `СОСТОЯНИЕ ЧЕЛОВЕКА:
 "${input_text}"
-Эмоции: ${emotions.length ? emotions.join(", ") : "не указаны"}
+Эмоции: ${safeEmotions.length ? safeEmotions.join(", ") : "не указаны"}
 Интенсивность: ${intensity ?? "—"} / 10
-Контекст: ${context || "—"}
+Контекст: ${safeContext || "—"}
 Язык: ${language_pref || "любой"}
 ${userMemory ? `\nЭМОЦИОНАЛЬНЫЙ ПРОФИЛЬ (учти, не цитируй):
 - Резюме: ${userMemory.summary || "—"}
@@ -268,6 +266,12 @@ ${userMemory ? `\nЭМОЦИОНАЛЬНЫЙ ПРОФИЛЬ (учти, не ци
     const results = await Promise.all(
       keys.map((k) => callCurator(k, LOVABLE_API_KEY, userBlock, candidatesJson)),
     );
+
+    if (results.every((result) => result.length === 0)) {
+      return new Response(JSON.stringify({
+        error: "Совет сейчас перегружен. Попробуйте обычный режим или повторите через минуту.",
+      }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
 
     // Orchestrator: dedupe by idx, merge votes, prefer items chosen by multiple curators
     type Merged = {
@@ -322,7 +326,6 @@ ${userMemory ? `\nЭМОЦИОНАЛЬНЫЙ ПРОФИЛЬ (учти, не ци
         from_vector: candidates.filter(c => c.origin === "vector").length,
         from_lexical: candidates.filter(c => c.origin === "lexical").length,
         from_hybrid: candidates.filter(c => c.origin === "hybrid").length,
-        from_random: candidates.filter(c => c.origin === "random").length,
         embedded_query: !!queryEmbedding,
         curators_active: keys.length,
         used_memory: !!userMemory,

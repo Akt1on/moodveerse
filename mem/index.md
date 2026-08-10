@@ -4,7 +4,7 @@
 MoodVerse: empathetic literary companion. Helps users process emotions through deeply resonant real poetry, prose, and film quotes. Never generic, never clinical — always warm, poetic, healing.
 AI matching MUST prioritize REAL existing works over AI-generated ones. Deep emotional resonance > keyword matching. Always balance: validation of pain + gentle hope/transformation.
 Canon: Russian (Пушкин, Есенин, Ахматова, Цветаева, Бродский, Мандельштам, Рубцов, Ахмадулина, Пастернак, Блок, Бунин) + world (Rilke, Neruda, Dickinson, Rumi, Baudelaire, Shakespeare, Whitman, Basho) + film (Shawshank, Dead Poets Society, Her, Interstellar, The Cranes Are Flying, Tarkovsky, Bergman).
-Hybrid search: real APIs (PoetryDB, Quotable.io, Open Library, API-Ninjas Quotes) FIRST, then pgvector semantic similarity, then AI stylization as last resort.
+Hybrid search: pgvector semantic retrieval first, lexical corroboration second, AI index-only reranking last. Never add random filler; return fewer results when relevance is weak.
 Visual style: Misty Blue — calm slate-blue, Cormorant Garamond serif, soft gradients, AuroraBackground. UI must feel literary and tender.
 Stack: Lovable Cloud + Lovable AI Gateway (google/gemini-2.5-pro). All external API calls go through Edge Functions. Russian-localized by default.
 
