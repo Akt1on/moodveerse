@@ -139,7 +139,7 @@ serve(async (req) => {
 
   try {
     const { input_text, emotions = [], intensity, context, language_pref } = await req.json();
-    if (!input_text || typeof input_text !== "string" || input_text.trim().length < 3) {
+    if (!input_text || typeof input_text !== "string" || input_text.trim().length < 3 || input_text.length > 4000) {
       return new Response(JSON.stringify({ error: "Опишите чувство подробнее" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -266,6 +266,12 @@ ${userMemory ? `\nЭМОЦИОНАЛЬНЫЙ ПРОФИЛЬ (учти, не ци
     const results = await Promise.all(
       keys.map((k) => callCurator(k, LOVABLE_API_KEY, userBlock, candidatesJson)),
     );
+
+    if (results.every((result) => result.length === 0)) {
+      return new Response(JSON.stringify({
+        error: "Совет сейчас перегружен. Попробуйте обычный режим или повторите через минуту.",
+      }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
 
     // Orchestrator: dedupe by idx, merge votes, prefer items chosen by multiple curators
     type Merged = {
