@@ -14,6 +14,57 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_spend_log: {
+        Row: {
+          cost_estimate: number
+          created_at: string
+          day: string
+          endpoint: string
+          id: string
+          tokens_estimate: number
+        }
+        Insert: {
+          cost_estimate?: number
+          created_at?: string
+          day?: string
+          endpoint: string
+          id?: string
+          tokens_estimate?: number
+        }
+        Update: {
+          cost_estimate?: number
+          created_at?: string
+          day?: string
+          endpoint?: string
+          id?: string
+          tokens_estimate?: number
+        }
+        Relationships: []
+      }
+      curated_authors: {
+        Row: {
+          created_at: string
+          id: string
+          language: string
+          name: string
+          priority: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          language?: string
+          name: string
+          priority?: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          language?: string
+          name?: string
+          priority?: number
+        }
+        Relationships: []
+      }
       favorites: {
         Row: {
           author: string | null
@@ -64,6 +115,45 @@ export type Database = {
           cursor?: string | null
           key?: string
           source?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      harvest_queue: {
+        Row: {
+          attempts: number
+          created_at: string
+          cursor: Json
+          error: string | null
+          id: string
+          inserted_count: number
+          priority: number
+          source: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          attempts?: number
+          created_at?: string
+          cursor?: Json
+          error?: string | null
+          id?: string
+          inserted_count?: number
+          priority?: number
+          source: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          attempts?: number
+          created_at?: string
+          cursor?: Json
+          error?: string | null
+          id?: string
+          inserted_count?: number
+          priority?: number
+          source?: string
+          status?: string
           updated_at?: string
         }
         Relationships: []
@@ -233,6 +323,51 @@ export type Database = {
         }
         Relationships: []
       }
+      user_resonance_signals: {
+        Row: {
+          created_at: string
+          embedding: string | null
+          id: string
+          source_text: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          source_text?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          source_text?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          created_at: string
+          id: string
+          role: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -247,6 +382,28 @@ export type Database = {
         }
         Returns: boolean
       }
+      claim_harvest_task: {
+        Args: never
+        Returns: {
+          attempts: number
+          created_at: string
+          cursor: Json
+          error: string | null
+          id: string
+          inserted_count: number
+          priority: number
+          source: string
+          status: string
+          updated_at: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "harvest_queue"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      has_role: { Args: { _role: string; _user_id: string }; Returns: boolean }
       library_stats: { Args: never; Returns: Json }
       match_literary_lexical: {
         Args: {
