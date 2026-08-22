@@ -857,7 +857,16 @@ async function embed(text: string, apiKey: string): Promise<number[] | null> {
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
-  const gate = await requireAdmin(req);
+  // Cron jobs authenticate with an internal token stored in app_config.
+  let cronOk = false;
+  const cronToken = req.headers.get("x-cron-token");
+  if (cronToken) {
+    const svc = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const { data: cfg } = await svc.from("app_config").select("value").eq("key", "cron_token").maybeSingle();
+    cronOk = !!cfg?.value && cfg.value === cronToken;
+  }
+
+  const gate = cronOk ? { ok: true as const } : await requireAdmin(req);
   if (!gate.ok) {
     return new Response(JSON.stringify({ error: gate.error }), {
       status: gate.status, headers: { ...corsHeaders, "Content-Type": "application/json" },
