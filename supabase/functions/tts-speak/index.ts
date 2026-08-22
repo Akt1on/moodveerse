@@ -1,4 +1,11 @@
-import { encode as base64Encode } from "https://deno.land/std@0.224.0/encoding/base64.ts";
+function base64Encode(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

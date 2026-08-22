@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Header } from "@/components/moodverse/Header";
 import { AuroraBackground } from "@/components/moodverse/AuroraBackground";
 import { MoodForm, MoodInput } from "@/components/moodverse/MoodForm";
@@ -20,17 +20,8 @@ const Index = () => {
   const [pieces, setPieces] = useState<Piece[] | null>(null);
   const [lastInput, setLastInput] = useState<MoodInput | null>(null);
 
-  // One-time silent seeding of the literary knowledge base.
-  useEffect(() => {
-    const KEY = "moodverse_seeded_v5_en_hy";
-    if (localStorage.getItem(KEY)) return;
-    supabase.functions.invoke("seed-library", { body: {} })
-      .then(({ data, error }) => {
-        if (!error) localStorage.setItem(KEY, "1");
-        console.log("seed-library:", data, error);
-      })
-      .catch(() => {});
-  }, []);
+
+
 
   const find = async (input: MoodInput) => {
     setLoading(true);
