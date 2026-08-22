@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Header } from "@/components/moodverse/Header";
 import { AuroraBackground } from "@/components/moodverse/AuroraBackground";
 import { MoodForm, MoodInput } from "@/components/moodverse/MoodForm";
