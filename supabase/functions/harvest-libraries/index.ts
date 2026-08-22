@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { requireAdmin } from "../_shared/admin.ts";
+import { cleanFragment, isQualityFragment } from "../_shared/quality.ts";
+import { withinBudget, logSpend, estimateTokens, EMBED_USD_PER_MTOKEN } from "../_shared/budget-guard.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 const corsHeaders = {
@@ -869,71 +871,158 @@ serve(async (req) => {
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
     const url = new URL(req.url);
-    const sources = (url.searchParams.get("sources") ??
-      "poetrydb,gutendex,wikisource,wikiquote,standardebooks,quotable,poemist,internetarchive,wikirandom,openlibrary,firecrawl").split(",");
+    const action = url.searchParams.get("action") ?? "run"; // run | plan | work
     const limitPerSource = parseInt(url.searchParams.get("limit") ?? "300", 10);
     const langs = (url.searchParams.get("langs") ?? "ru,en,hy,fr,de,es").split(",");
     const doEmbed = url.searchParams.get("embed") !== "0" && !!LOVABLE_API_KEY;
 
-    const all: Piece[] = [];
-    if (sources.includes("poetrydb")) all.push(...await fetchPoetryDB(limitPerSource));
-    if (sources.includes("gutendex")) all.push(...await fetchGutendex(limitPerSource, langs));
-    if (sources.includes("wikisource")) all.push(...await fetchWikisource(supabase, limitPerSource, langs));
-    if (sources.includes("wikiquote")) all.push(...await fetchWikiquote(supabase, limitPerSource, langs));
-    if (sources.includes("standardebooks")) all.push(...await fetchStandardEbooks(limitPerSource));
-    if (sources.includes("quotable")) all.push(...await fetchQuotable(supabase, limitPerSource));
-    if (sources.includes("poemist")) all.push(...await fetchPoemist(limitPerSource));
-    if (sources.includes("internetarchive")) all.push(...await fetchInternetArchive(supabase, limitPerSource, langs));
-    if (sources.includes("wikirandom")) all.push(...await fetchWikiRandom(supabase, limitPerSource, langs));
-    if (sources.includes("openlibrary")) all.push(...await fetchOpenLibrary(supabase, limitPerSource, langs));
-    if (sources.includes("firecrawl")) all.push(...await fetchFirecrawl(supabase, limitPerSource, langs));
+    const ALL_SOURCES = [
+      "poetrydb", "gutendex", "wikisource", "wikiquote", "standardebooks",
+      "quotable", "poemist", "internetarchive", "wikirandom", "openlibrary", "firecrawl",
+    ];
 
-    // Uniqueness in DB is (source_type, external_id) — dedup on the same composite key.
-    const localSeen = new Set<string>();
-    const unique = all.filter((p) => {
-      const k = `${p.source_type}::${p.external_id}`;
-      if (localSeen.has(k)) return false;
-      localSeen.add(k);
-      return true;
-    });
-
-    // Dedup by external_id against DB (chunked — a single .in() with hundreds of long ids overflows the URL)
-    const seen = new Set<string>();
-    const ids = unique.map((p) => p.external_id);
-    for (let i = 0; i < ids.length; i += 50) {
-      const { data: have, error } = await supabase
-        .from("literary_works").select("external_id, source_type").in("external_id", ids.slice(i, i + 50));
-      if (error) { console.error("dedup lookup", error); continue; }
-      for (const r of have ?? []) seen.add(`${r.source_type}::${r.external_id}`);
-    }
-    const fresh = unique.filter((p) => !seen.has(`${p.source_type}::${p.external_id}`));
-
-    let inserted = 0, failed = 0;
-    for (let i = 0; i < fresh.length; i += 25) {
-      const chunk = fresh.slice(i, i + 25);
-      const rows = await Promise.all(chunk.map(async (p) => {
-        const embedding = doEmbed ? await embed(`${p.title ?? ""}\n${p.author}\n${p.text}`, LOVABLE_API_KEY!) : null;
-        return {
-          text: p.text, author: p.author, title: p.title ?? null,
-          source_type: p.source_type, emotions_tags: p.emotions_tags ?? [],
-          language: p.language ?? "en", year: p.year ?? null,
-          external_id: p.external_id, embedding: embedding as any,
-        };
-      }));
-      const { error, data } = await supabase.from("literary_works").insert(rows).select("id");
-      if (!error) { inserted += data?.length ?? 0; continue; }
-      // Fall back to row-by-row so one bad/duplicate row doesn't kill the whole chunk.
-      for (const row of rows) {
-        const { error: e1 } = await supabase.from("literary_works").insert(row);
-        if (e1) { if (e1.code !== "23505") console.error("insert", e1); failed++; }
-        else inserted++;
+    // ---------- planner: fill the queue, one bounded task per source ----------
+    if (action === "plan") {
+      const { count } = await supabase.from("harvest_queue")
+        .select("id", { count: "exact", head: true }).in("status", ["pending", "running"]);
+      if ((count ?? 0) >= ALL_SOURCES.length) {
+        return new Response(JSON.stringify({ action, skipped: true, pending: count }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
+      const rows = ALL_SOURCES.map((src, i) => ({
+        source: src,
+        cursor: { langs, limit: limitPerSource },
+        priority: 100 - i,
+        status: "pending",
+      }));
+      const { error } = await supabase.from("harvest_queue").insert(rows);
+      if (error) throw error;
+      return new Response(JSON.stringify({ action, queued: rows.length }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // ---------- worker: claim exactly one task and process it ----------
+    let taskId: string | null = null;
+    let sources: string[];
+    let taskLangs = langs;
+    let taskLimit = limitPerSource;
+
+    if (action === "work") {
+      const { data: task, error: claimErr } = await supabase.rpc("claim_harvest_task");
+      if (claimErr) throw claimErr;
+      const t = Array.isArray(task) ? task[0] : task;
+      if (!t?.id) {
+        return new Response(JSON.stringify({ action, idle: true }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      taskId = t.id;
+      sources = [t.source];
+      taskLangs = t.cursor?.langs ?? langs;
+      taskLimit = t.cursor?.limit ?? limitPerSource;
+    } else {
+      sources = (url.searchParams.get("sources") ?? ALL_SOURCES.join(",")).split(",");
+    }
+
+    // ---------- budget circuit breaker ----------
+    if (doEmbed && !(await withinBudget(supabase, 0.05))) {
+      if (taskId) {
+        await supabase.from("harvest_queue")
+          .update({ status: "paused", error: "daily AI budget reached", updated_at: new Date().toISOString() })
+          .eq("id", taskId);
+      }
+      return new Response(JSON.stringify({ error: "Дневной лимит AI-бюджета исчерпан", paused: true }),
+        { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    let inserted = 0, failed = 0, harvested = 0, duplicates = 0;
+    try {
+      const all: Piece[] = [];
+      if (sources.includes("poetrydb")) all.push(...await fetchPoetryDB(taskLimit));
+      if (sources.includes("gutendex")) all.push(...await fetchGutendex(taskLimit, taskLangs));
+      if (sources.includes("wikisource")) all.push(...await fetchWikisource(supabase, taskLimit, taskLangs));
+      if (sources.includes("wikiquote")) all.push(...await fetchWikiquote(supabase, taskLimit, taskLangs));
+      if (sources.includes("standardebooks")) all.push(...await fetchStandardEbooks(taskLimit));
+      if (sources.includes("quotable")) all.push(...await fetchQuotable(supabase, taskLimit));
+      if (sources.includes("poemist")) all.push(...await fetchPoemist(taskLimit));
+      if (sources.includes("internetarchive")) all.push(...await fetchInternetArchive(supabase, taskLimit, taskLangs));
+      if (sources.includes("wikirandom")) all.push(...await fetchWikiRandom(supabase, taskLimit, taskLangs));
+      if (sources.includes("openlibrary")) all.push(...await fetchOpenLibrary(supabase, taskLimit, taskLangs));
+      if (sources.includes("firecrawl")) all.push(...await fetchFirecrawl(supabase, taskLimit, taskLangs));
+      harvested = all.length;
+
+      // Quality gate: clean markup and drop truncated / junk fragments.
+      const quality = all
+        .map((p) => ({ ...p, text: cleanFragment(p.text) }))
+        .filter((p) => isQualityFragment(p.text));
+
+      // Uniqueness in DB is (source_type, external_id) — dedup on the same composite key.
+      const localSeen = new Set<string>();
+      const unique = quality.filter((p) => {
+        const k = `${p.source_type}::${p.external_id}`;
+        if (localSeen.has(k)) return false;
+        localSeen.add(k);
+        return true;
+      });
+
+      const seen = new Set<string>();
+      const ids = unique.map((p) => p.external_id);
+      for (let i = 0; i < ids.length; i += 50) {
+        const { data: have, error } = await supabase
+          .from("literary_works").select("external_id, source_type").in("external_id", ids.slice(i, i + 50));
+        if (error) { console.error("dedup lookup", error); continue; }
+        for (const r of have ?? []) seen.add(`${r.source_type}::${r.external_id}`);
+      }
+      const fresh = unique.filter((p) => !seen.has(`${p.source_type}::${p.external_id}`));
+      duplicates = harvested - fresh.length;
+
+      let embedTokens = 0;
+      for (let i = 0; i < fresh.length; i += 25) {
+        const chunk = fresh.slice(i, i + 25);
+        const rows = await Promise.all(chunk.map(async (p) => {
+          const input = `${p.title ?? ""}\n${p.author}\n${p.text}`;
+          const embedding = doEmbed ? await embed(input, LOVABLE_API_KEY!) : null;
+          if (embedding) embedTokens += estimateTokens(input);
+          return {
+            text: p.text, author: p.author, title: p.title ?? null,
+            source_type: p.source_type, emotions_tags: p.emotions_tags ?? [],
+            language: p.language ?? "en", year: p.year ?? null,
+            external_id: p.external_id, embedding: embedding as any,
+          };
+        }));
+        const { error, data } = await supabase.from("literary_works").insert(rows).select("id");
+        if (!error) { inserted += data?.length ?? 0; }
+        else {
+          for (const row of rows) {
+            const { error: e1 } = await supabase.from("literary_works").insert(row);
+            if (e1) { if (e1.code !== "23505") console.error("insert", e1); failed++; }
+            else inserted++;
+          }
+        }
+      }
+
+      if (embedTokens > 0) {
+        await logSpend(supabase, "harvest-embeddings", embedTokens,
+          (embedTokens / 1_000_000) * EMBED_USD_PER_MTOKEN);
+      }
+
+      if (taskId) {
+        await supabase.from("harvest_queue")
+          .update({ status: "done", inserted_count: inserted, error: null, updated_at: new Date().toISOString() })
+          .eq("id", taskId);
+      }
+    } catch (inner) {
+      if (taskId) {
+        await supabase.from("harvest_queue")
+          .update({ status: "error", error: String((inner as Error).message ?? inner), updated_at: new Date().toISOString() })
+          .eq("id", taskId);
+      }
+      throw inner;
     }
 
     return new Response(JSON.stringify({
-      sources, languages: langs, harvested: all.length,
-      duplicates: all.length - fresh.length, inserted, failed, embedded: doEmbed,
-    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      action, task_id: taskId, sources, languages: taskLangs,
+      harvested, duplicates, inserted, failed, embedded: doEmbed,
+}), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e) {
     console.error("harvest-libraries error:", e);
     return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown" }),
