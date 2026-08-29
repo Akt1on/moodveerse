@@ -95,6 +95,7 @@ serve(async (req) => {
 
     // Optional: read user memory if user is authenticated
     let userMemory: { summary?: string; recurring_themes?: string[]; dominant_emotions?: string[]; agent_notes?: string } | null = null;
+    const recentKeys = new Set<string>();
     const authHeader = req.headers.get("Authorization") || "";
     if (authHeader && authHeader !== `Bearer ${ANON}`) {
       try {
@@ -107,9 +108,19 @@ serve(async (req) => {
             .eq("user_id", ud.user.id)
             .maybeSingle();
           if (mem) userMemory = mem as any;
+          const { data: favs } = await supabase
+            .from("favorites")
+            .select("author, title")
+            .eq("user_id", ud.user.id)
+            .order("created_at", { ascending: false })
+            .limit(40);
+          for (const f of favs ?? []) {
+            recentKeys.add(`${f.author ?? ""}|${f.title ?? ""}`.toLowerCase());
+          }
         }
       } catch (e) { console.log("memory lookup skipped:", e); }
     }
+
 
     const lang = (language_pref && ["ru", "hy", "en"].includes(language_pref)) ? language_pref : null;
     const safeEmotions = Array.isArray(emotions)
