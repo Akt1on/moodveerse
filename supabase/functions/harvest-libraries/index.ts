@@ -783,6 +783,72 @@ async function fetchWikiRandom(supabase: any, limit: number, languages: string[]
   return pieces.slice(0, limit);
 }
 
+// ---------- Source: curated authors (canon-first Wikisource sweep, priority-ordered) ----------
+async function fetchCuratedAuthors(supabase: any, limit: number, languages: string[]): Promise<Piece[]> {
+  const pieces: Piece[] = [];
+  const { data: authors, error } = await supabase
+    .from("curated_authors")
+    .select("name, language, priority")
+    .order("priority", { ascending: false })
+    .limit(400);
+  if (error || !authors?.length) return pieces;
+
+  const pool = (authors as any[]).filter((a) => languages.includes(a.language));
+  if (!pool.length) return pieces;
+
+  // Cursor rotates the starting author so consecutive runs cover the whole canon.
+  const prev = await getCursor(supabase, "curatedauthors", "offset");
+  let start = prev ? (parseInt(prev, 10) || 0) : 0;
+  if (start >= pool.length) start = 0;
+  const batch = pool.slice(start, start + 8);
+  const perAuthor = Math.max(4, Math.floor(limit / Math.max(1, batch.length)));
+
+  for (const a of batch) {
+    const lang = a.language as string;
+    const host = `https://${lang}.wikisource.org/w/api.php`;
+    try {
+      const listUrl = `${host}?action=query&format=json&origin=*&list=search` +
+        `&srsearch=${encodeURIComponent(a.name)}&srnamespace=0&srlimit=20`;
+      const lr = await fetch(listUrl, { headers: { "User-Agent": "moodverse-harvester/1.0" } });
+      if (!lr.ok) continue;
+      const lj = await lr.json();
+      const candidates: any[] = (lj?.query?.search ?? [])
+        .map((p: any) => ({ id: p.pageid, title: p.title }))
+        .filter((p: any) => typeof p.title === "string" && !/^(Страница|Индекс|Page|Index|Автор|Author)[:\s]/i.test(p.title));
+      if (!candidates.length) continue;
+
+      await new Promise((res) => setTimeout(res, 400));
+      const ids = candidates.slice(0, 20).map((c: any) => c.id).join("|");
+      const exUrl = `${host}?action=query&format=json&origin=*&prop=extracts&explaintext=1&exlimit=20&pageids=${ids}`;
+      const er = await fetch(exUrl, { headers: { "User-Agent": "moodverse-harvester/1.0 (contact: moodverse)" } });
+      if (!er.ok) continue;
+      const ej = await er.json();
+      let taken = 0;
+      for (const pg of Object.values(ej?.query?.pages ?? {}) as any[]) {
+        if (taken >= perAuthor) break;
+        const block = pickWikiBlock((pg?.extract ?? "").toString().replace(/\[\d+\]/g, ""));
+        if (!block) continue;
+        const rawTitle = (pg.title ?? "").toString();
+        const title = (rawTitle.match(/^(.*?)\s*\(.+\)\s*$/)?.[1] ?? rawTitle).slice(0, 200);
+        pieces.push({
+          text: block.slice(0, 4000),
+          author: String(a.name).slice(0, 200),
+          title,
+          source_type: "poem",
+          language: lang,
+          emotions_tags: tagEmotions(block),
+          external_id: `curated:${lang}:${pg.pageid}`.slice(0, 200),
+        });
+        taken++;
+      }
+    } catch { /* skip author */ }
+  }
+
+  await setCursor(supabase, "curatedauthors", "offset", String(start + batch.length >= pool.length ? 0 : start + batch.length));
+  return pieces.slice(0, limit);
+}
+
+
 // ---------- Source: Open Library / Gutenberg full-text prose passages ----------
 async function fetchOpenLibrary(supabase: any, limit: number, languages: string[]): Promise<Piece[]> {
   const OL_LANG: Record<string, string> = { ru: "rus", en: "eng", hy: "arm", fr: "fre", de: "ger", es: "spa" };
