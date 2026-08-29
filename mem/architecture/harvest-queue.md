@@ -18,3 +18,8 @@ type: feature
 - `harvest-libraries`, `backfill-embeddings`, `ingest-works`, `seed-library` are admin-only (`_shared/admin.ts` `requireAdmin`).
 - Cron bypass: header `x-cron-token` compared against `public.app_config` row `cron_token` (service-role only table, no RLS policies by design).
 - The client no longer auto-invokes `seed-library` (library is fully seeded).
+
+## Source: curatedauthors
+- Canon-first sweep: reads `curated_authors` ordered by `priority`, rotates 8 authors per run via the `curatedauthors:offset` cursor.
+- Searches the author's name on their language Wikisource; when the plaintext extract is empty (template-built poem pages) it falls back to the rendered HTML (`action=parse`) and takes up to 2 blocks per page.
+- external_id format `curated:<lang>:<pageid>:<block>`.
