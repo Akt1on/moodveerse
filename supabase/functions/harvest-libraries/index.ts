@@ -826,21 +826,42 @@ async function fetchCuratedAuthors(supabase: any, limit: number, languages: stri
       let taken = 0;
       for (const pg of Object.values(ej?.query?.pages ?? {}) as any[]) {
         if (taken >= perAuthor) break;
-        const block = pickWikiBlock((pg?.extract ?? "").toString().replace(/\[\d+\]/g, ""));
-        if (!block) continue;
+        let raw = (pg?.extract ?? "").toString().replace(/\[\d+\]/g, "");
+        // Many Wikisource poem pages are template-built and return an empty extract —
+        // fall back to the rendered HTML for those.
+        if (raw.trim().length < 120) {
+          try {
+            await new Promise((res) => setTimeout(res, 250));
+            const pr = await fetch(`${host}?action=parse&format=json&origin=*&prop=text&pageid=${pg.pageid}`,
+              { headers: { "User-Agent": "moodverse-harvester/1.0 (contact: moodverse)" } });
+            if (pr.ok) {
+              const pj = await pr.json();
+              raw = wikiHtmlToText((pj?.parse?.text?.["*"] ?? "").toString());
+            }
+          } catch { /* keep empty */ }
+        }
+        const blocks = raw.split(/\n\s*\n/).map((b: string) => b.trim())
+          .filter((b: string) => b.length > 120 && b.length < 1500 && !WIKI_NOISE.test(b))
+          .sort((x: string, y: string) => y.length - x.length)
+          .slice(0, 2);
+        if (!blocks.length) continue;
         const rawTitle = (pg.title ?? "").toString();
         const title = (rawTitle.match(/^(.*?)\s*\(.+\)\s*$/)?.[1] ?? rawTitle).slice(0, 200);
-        pieces.push({
-          text: block.slice(0, 4000),
-          author: String(a.name).slice(0, 200),
-          title,
-          source_type: "poem",
-          language: lang,
-          emotions_tags: tagEmotions(block),
-          external_id: `curated:${lang}:${pg.pageid}`.slice(0, 200),
+        blocks.forEach((block: string, bi: number) => {
+          if (taken >= perAuthor) return;
+          pieces.push({
+            text: block.slice(0, 4000),
+            author: String(a.name).slice(0, 200),
+            title,
+            source_type: "poem",
+            language: lang,
+            emotions_tags: tagEmotions(block),
+            external_id: `curated:${lang}:${pg.pageid}:${bi}`.slice(0, 200),
+          });
+          taken++;
         });
-        taken++;
       }
+
     } catch { /* skip author */ }
   }
 
