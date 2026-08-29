@@ -23,3 +23,9 @@ type: feature
 - Vector retrieval is the primary signal; lexical retrieval is normalized separately and adds precision/reciprocal evidence.
 - A candidate must relate to the user's situation and emotional conflict, not merely share a keyword.
 - If no candidate clears the relevance threshold, ask the user for more detail instead of returning weak results.
+
+**Precision layer (find-resonance):**
+- Retry #1: if vector pool < 10 rows — re-run with threshold 0.12 without the emotion filter.
+- Retry #2: if still < 6 rows and a language filter is set — re-run with 0.12 and no language filter.
+- FTS fallback: if lexical returns 0 rows — re-run on the raw `input_text`, then without the language filter.
+- Anti-repetition: works already saved to the user's favorites (last 40) get a -0.25 score penalty.
