@@ -122,23 +122,51 @@ serve(async (req) => {
     // Hybrid retrieval: semantic search is primary; lexical search adds precision.
     const queryEmbedding = await embedQuery(queryText, LOVABLE_API_KEY);
 
-    const [vecResp, lexResp] = await Promise.all([
+    const runVector = (threshold: number, count: number, filterLang: string | null, useEmotions: boolean) =>
       queryEmbedding
         ? supabase.rpc("match_literary_works", {
             query_embedding: queryEmbedding as any,
-            match_count: 40,
-            filter_language: lang,
-            filter_emotions: lowerEmotions.length ? lowerEmotions : null,
-            similarity_threshold: 0.20,
+            match_count: count,
+            filter_language: filterLang,
+            filter_emotions: useEmotions && lowerEmotions.length ? lowerEmotions : null,
+            similarity_threshold: threshold,
           })
-        : Promise.resolve({ data: null, error: null } as any),
+        : Promise.resolve({ data: null, error: null } as any);
+
+    const runLexical = (text: string, count: number, filterLang: string | null) =>
       supabase.rpc("match_literary_lexical", {
-        query_text: queryText,
+        query_text: text,
         query_emotions: lowerEmotions.length ? lowerEmotions : null,
-        preferred_language: lang,
-        match_count: 30,
-      }),
+        preferred_language: filterLang,
+        match_count: count,
+      });
+
+    let [vecResp, lexResp] = await Promise.all([
+      runVector(0.20, 40, lang, true),
+      runLexical(queryText, 30, lang),
     ]);
+
+    const rowCount = (r: any) => ((r?.data as any[]) ?? []).length;
+
+    // Retry #1 — relax the semantic threshold and drop the emotion bonus filter.
+    if (rowCount(vecResp) < 10) {
+      const relaxed = await runVector(0.12, 48, lang, false);
+      if (rowCount(relaxed) > rowCount(vecResp)) vecResp = relaxed;
+    }
+    // Retry #2 — drop the language filter entirely when the pool is still thin.
+    if (rowCount(vecResp) < 6 && lang) {
+      const anyLang = await runVector(0.12, 48, null, false);
+      if (rowCount(anyLang) > rowCount(vecResp)) vecResp = anyLang;
+    }
+    // FTS fallback — search the raw phrase when the composed query found nothing.
+    if (rowCount(lexResp) === 0) {
+      const raw = await runLexical(input_text.trim(), 30, lang);
+      if (rowCount(raw) > 0) lexResp = raw;
+      else if (lang) {
+        const rawAny = await runLexical(input_text.trim(), 30, null);
+        if (rowCount(rawAny) > 0) lexResp = rawAny;
+      }
+    }
 
     const candidates: Candidate[] = [];
     const seen = new Map<string, Candidate>();
@@ -177,6 +205,14 @@ serve(async (req) => {
         candidates.push(item);
     }
 
+    // Anti-repetition: softly demote pieces this person already saved recently.
+    if (recentKeys.size) {
+      for (const c of candidates) {
+        const key = `${c.author}|${c.title ?? ""}`.toLowerCase();
+        if (recentKeys.has(key)) c.score = (c.score ?? 0) - 0.25;
+      }
+    }
+
     // Rank by score (hybrid gets bonus baked in), then trim
     candidates.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
@@ -188,6 +224,7 @@ serve(async (req) => {
 
     // A larger semantic pool gives the curator genuine alternatives without random filler.
     const pool = candidates.slice(0, 32);
+
     const candidatesPayload = pool.map((c, i) => ({
       idx: i, author: c.author, title: c.title || null, source_type: c.source_type,
       year: c.year ?? null, language: c.language ?? "ru",
