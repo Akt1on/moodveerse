@@ -73,64 +73,68 @@ async function embedQuery(text: string, apiKey: string): Promise<number[] | null
   } catch { return null; }
 }
 
-async function callCurator(
-  key: CuratorKey,
+type Pick = { idx: number; explanation: string; relevance_score: number };
+
+/** Один структурированный вызов: все 5 кураторов голосуют в одном ответе. */
+async function callCouncil(
   apiKey: string,
   userBlock: string,
   candidatesJson: string,
-): Promise<{ idx: number; explanation: string; relevance_score: number }[]> {
-  const c = CURATORS[key];
+): Promise<Record<CuratorKey, Pick[]> | null> {
+  const roles = (Object.keys(CURATORS) as CuratorKey[])
+    .map((k) => `[${k}] ${CURATORS[k].system}`).join("\n\n");
+  const pickSchema = {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        idx: { type: "number" },
+        explanation: { type: "string" },
+        relevance_score: { type: "number", description: "0-100" },
+      },
+      required: ["idx", "explanation", "relevance_score"],
+      additionalProperties: false,
+    },
+  };
+  const props: Record<string, unknown> = {};
+  for (const k of Object.keys(CURATORS)) props[k] = pickSchema;
+
   const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "google/gemini-2.5-flash",
       messages: [
-        { role: "system", content: `${c.system}\n\n${COMMON_RULES}` },
+        { role: "system", content: `Ты — Совет из 5 независимых кураторов. Каждый говорит своим голосом и выбирает свои 2 произведения.\n\n${roles}\n\n${COMMON_RULES}\n- Кураторы могут совпадать в выборе, если произведение действительно лучшее.\n- relevance_score честный: насколько текст отвечает именно на это состояние.` },
         { role: "user", content: `${userBlock}\n\nКАНДИДАТЫ:\n${candidatesJson}` },
       ],
       tools: [{
         type: "function",
         function: {
-          name: "pick_two",
-          description: "Выбери 2 произведения из кандидатов",
-          parameters: {
-            type: "object",
-            properties: {
-              picks: {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: {
-                    idx: { type: "number" },
-                    explanation: { type: "string" },
-                    relevance_score: { type: "number" },
-                  },
-                  required: ["idx", "explanation", "relevance_score"],
-                  additionalProperties: false,
-                },
-              },
-            },
-            required: ["picks"],
-            additionalProperties: false,
-          },
+          name: "council_vote",
+          description: "Голоса всех 5 кураторов",
+          parameters: { type: "object", properties: props, required: Object.keys(CURATORS), additionalProperties: false },
         },
       }],
-      tool_choice: { type: "function", function: { name: "pick_two" } },
+      tool_choice: { type: "function", function: { name: "council_vote" } },
     }),
   });
   if (!resp.ok) {
-    console.error(`curator ${key} error`, resp.status, await resp.text());
-    return [];
+    console.error("council error", resp.status, await resp.text());
+    return null;
   }
   const data = await resp.json();
   const tc = data.choices?.[0]?.message?.tool_calls?.[0];
-  if (!tc) return [];
+  if (!tc) return null;
   try {
     const args = JSON.parse(tc.function.arguments);
-    return (args.picks || []).slice(0, 2);
+    const out = {} as Record<CuratorKey, Pick[]>;
+    for (const k of Object.keys(CURATORS) as CuratorKey[]) {
+      out[k] = (Array.isArray(args[k]) ? args[k] : []).slice(0, 2);
+    }
+    return out;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -170,20 +174,24 @@ serve(async (req) => {
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // User memory (if logged in)
+    // User memory + recent favorites (if logged in)
     let userMemory: { summary?: string; recurring_themes?: string[]; dominant_emotions?: string[]; agent_notes?: string } | null = null;
+    const recentFavTexts = new Set<string>();
     const authHeader = req.headers.get("Authorization") || "";
     if (authHeader && authHeader !== `Bearer ${ANON}`) {
       try {
         const userClient = createClient(SUPABASE_URL, ANON, { global: { headers: { Authorization: authHeader } } });
         const { data: ud } = await userClient.auth.getUser();
         if (ud?.user) {
-          const { data: mem } = await supabase
-            .from("user_memory")
-            .select("summary, recurring_themes, dominant_emotions, agent_notes")
-            .eq("user_id", ud.user.id)
-            .maybeSingle();
+          const [{ data: mem }, { data: favs }] = await Promise.all([
+            supabase.from("user_memory")
+              .select("summary, recurring_themes, dominant_emotions, agent_notes")
+              .eq("user_id", ud.user.id).maybeSingle(),
+            supabase.from("favorites").select("text")
+              .eq("user_id", ud.user.id).order("created_at", { ascending: false }).limit(40),
+          ]);
           if (mem) userMemory = mem as any;
+          for (const f of (favs as any[]) ?? []) if (f?.text) recentFavTexts.add(String(f.text).slice(0, 200));
         }
       } catch (e) { console.log("memory lookup skipped:", e); }
     }
@@ -196,42 +204,75 @@ serve(async (req) => {
     const safeContext = typeof context === "string" ? context.slice(0, 1500) : "";
     const queryText = `Состояние: ${input_text.trim()}\nЭмоции: ${safeEmotions.join(", ")}\nКонтекст: ${safeContext}`;
 
-    // Hybrid retrieval — wider pool for 5 curators
     const queryEmbedding = await embedQuery(queryText, LOVABLE_API_KEY);
-    const [vecResp, lexResp] = await Promise.all([
-      queryEmbedding
-        ? supabase.rpc("match_literary_works", {
-            query_embedding: queryEmbedding as any,
-            match_count: 40,
-            filter_language: lang,
-            filter_emotions: lowerEmotions.length ? lowerEmotions : null,
-            similarity_threshold: 0.20,
-          })
-        : Promise.resolve({ data: null, error: null } as any),
-      supabase.rpc("match_literary_lexical", {
-        query_text: queryText,
-        query_emotions: lowerEmotions.length ? lowerEmotions : null,
-        preferred_language: lang,
-        match_count: 30,
-      }),
-    ]);
+
+    const retrieve = async (opts: { threshold: number; emotions: string[] | null; language: string | null; lexText: string }) => {
+      const [v, l] = await Promise.all([
+        queryEmbedding
+          ? supabase.rpc("match_literary_works", {
+              query_embedding: queryEmbedding as any,
+              match_count: 40,
+              filter_language: opts.language,
+              filter_emotions: opts.emotions,
+              similarity_threshold: opts.threshold,
+            })
+          : Promise.resolve({ data: null, error: null } as any),
+        supabase.rpc("match_literary_lexical", {
+          query_text: opts.lexText,
+          query_emotions: opts.emotions,
+          preferred_language: opts.language,
+          match_count: 30,
+        }),
+      ]);
+      return { vec: (v?.data as any[]) ?? [], lex: (l?.data as any[]) ?? [] };
+    };
+
+    const emoFilter = lowerEmotions.length ? lowerEmotions : null;
+    let { vec, lex } = await retrieve({ threshold: 0.20, emotions: emoFilter, language: lang, lexText: queryText });
+    if (lex.length === 0) {
+      lex = (await retrieve({ threshold: 1, emotions: emoFilter, language: lang, lexText: input_text.trim() })).lex;
+    }
+    if (vec.length + lex.length < 10) {
+      const r = await retrieve({ threshold: 0.12, emotions: null, language: lang, lexText: queryText });
+      vec = vec.concat(r.vec); lex = lex.concat(r.lex);
+    }
+    if (vec.length + lex.length < 6 && lang) {
+      const r = await retrieve({ threshold: 0.12, emotions: null, language: null, lexText: queryText });
+      vec = vec.concat(r.vec); lex = lex.concat(r.lex);
+    }
+
+    // Normalize each channel to [0..1] before fusion
+    const norm = (rows: any[], key: (d: any) => number) => {
+      const vals = rows.map(key);
+      const max = Math.max(...vals, 0), min = Math.min(...vals, 0);
+      const span = max - min || 1;
+      return (d: any) => (key(d) - min) / span;
+    };
+    const vNorm = norm(vec, (d) => Number(d.similarity ?? d.score ?? 0));
+    const lNorm = norm(lex, (d) => Number(d.score ?? 0));
 
     const candidates: Candidate[] = [];
     const seen = new Map<string, Candidate>();
-    for (const d of (vecResp?.data as any[]) ?? []) {
+    for (const d of vec) {
       if (seen.has(d.id)) continue;
-      const c: Candidate = { id: d.id, text: d.text, author: d.author, title: d.title, source_type: d.source_type, year: d.year, language: d.language, score: d.similarity ?? d.score, origin: "vector" };
+      const c: Candidate = { id: d.id, text: d.text, author: d.author, title: d.title, source_type: d.source_type, year: d.year, language: d.language, score: 0.65 * vNorm(d), origin: "vector" };
       seen.set(d.id, c); candidates.push(c);
     }
-    for (const d of (lexResp.data as any[]) ?? []) {
+    for (const d of lex) {
       const existing = seen.get(d.id);
       if (existing) {
-        existing.origin = "hybrid";
-        existing.score = (existing.score ?? 0) + (d.score ?? 0) * 0.5 + 0.15;
+        if (existing.origin !== "hybrid") {
+          existing.origin = "hybrid";
+          existing.score = (existing.score ?? 0) + 0.35 * lNorm(d) + 0.1;
+        }
         continue;
       }
-      const c: Candidate = { id: d.id, text: d.text, author: d.author, title: d.title, source_type: d.source_type, year: d.year, language: d.language, score: d.score, origin: "lexical" };
+      const c: Candidate = { id: d.id, text: d.text, author: d.author, title: d.title, source_type: d.source_type, year: d.year, language: d.language, score: 0.35 * lNorm(d), origin: "lexical" };
       seen.set(d.id, c); candidates.push(c);
+    }
+    // Anti-repetition: penalize recently favorited works
+    for (const c of candidates) {
+      if (recentFavTexts.has(String(c.text).slice(0, 200))) c.score = (c.score ?? 0) - 0.25;
     }
     candidates.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
@@ -261,13 +302,11 @@ ${userMemory ? `\nЭМОЦИОНАЛЬНЫЙ ПРОФИЛЬ (учти, не ци
 - Состояния: ${(userMemory.dominant_emotions || []).join(", ") || "—"}
 - Заметки: ${userMemory.agent_notes || "—"}\n` : ""}`;
 
-    // Run all 5 curators in parallel
+    // One structured call: all 5 curators vote together
     const keys: CuratorKey[] = ["poet", "philosopher", "healer", "critic", "mystic"];
-    const results = await Promise.all(
-      keys.map((k) => callCurator(k, LOVABLE_API_KEY, userBlock, candidatesJson)),
-    );
+    const votes = await callCouncil(LOVABLE_API_KEY, userBlock, candidatesJson);
 
-    if (results.every((result) => result.length === 0)) {
+    if (!votes || keys.every((k) => votes[k].length === 0)) {
       return new Response(JSON.stringify({
         error: "Совет сейчас перегружен. Попробуйте обычный режим или повторите через минуту.",
       }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -279,12 +318,14 @@ ${userMemory ? `\nЭМОЦИОНАЛЬНЫЙ ПРОФИЛЬ (учти, не ци
       curators: { key: CuratorKey; label: string; emoji: string; explanation: string; score: number }[];
     };
     const merged = new Map<number, Merged>();
-    keys.forEach((k, i) => {
-      for (const p of results[i]) {
-        if (typeof p.idx !== "number" || p.idx < 0 || p.idx >= pool.length) continue;
+    keys.forEach((k) => {
+      const seenIdx = new Set<number>();
+      for (const p of votes[k]) {
+        if (!Number.isInteger(p.idx) || p.idx < 0 || p.idx >= pool.length || seenIdx.has(p.idx)) continue;
+        seenIdx.add(p.idx);
         const c = CURATORS[k];
         const existing = merged.get(p.idx);
-        const entry = { key: k, label: c.label, emoji: c.emoji, explanation: p.explanation, score: p.relevance_score };
+        const entry = { key: k, label: c.label, emoji: c.emoji, explanation: String(p.explanation || "").slice(0, 600), score: Number(p.relevance_score) || 0 };
         if (existing) existing.curators.push(entry);
         else merged.set(p.idx, { idx: p.idx, curators: [entry] });
       }

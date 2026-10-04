@@ -26,16 +26,17 @@ const Favorites = () => {
   const [hasMore, setHasMore] = useState(true);
 
   const loadPage = useCallback(async (from: number) => {
-    const { data, error } = await supabase
+    let query = supabase
       .from("favorites")
       .select("*")
-      .order("created_at", { ascending: false })
-      .range(from, from + PAGE_SIZE - 1);
+      .order("created_at", { ascending: false });
+    if (filter !== "all") query = query.eq("source_type", filter);
+    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
     if (error) { toast.error("Не удалось загрузить"); return []; }
     const rows = (data ?? []) as any as Fav[];
     setHasMore(rows.length === PAGE_SIZE);
     return rows;
-  }, []);
+  }, [filter]);
 
   useEffect(() => {
     if (!user) return;
@@ -114,7 +115,7 @@ const Favorites = () => {
           ))}
         </div>
 
-        {!busy && hasMore && favs.length > 0 && !q && filter === "all" && (
+        {!busy && hasMore && favs.length > 0 && !q && (
           <div className="flex justify-center mt-8">
             <Button variant="ghost" onClick={loadMore} disabled={loadingMore} className="rounded-full">
               {loadingMore ? "Загружаем..." : "Показать ещё"}
