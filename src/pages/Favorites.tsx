@@ -115,7 +115,7 @@ const Favorites = () => {
           ))}
         </div>
 
-        {!busy && hasMore && favs.length > 0 && !q && filter === "all" && (
+        {!busy && hasMore && favs.length > 0 && !q && (
           <div className="flex justify-center mt-8">
             <Button variant="ghost" onClick={loadMore} disabled={loadingMore} className="rounded-full">
               {loadingMore ? "Загружаем..." : "Показать ещё"}
