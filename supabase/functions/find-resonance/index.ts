@@ -327,14 +327,20 @@ ${JSON.stringify(candidatesPayload)}`;
 
     const args = JSON.parse(toolCall.function.arguments);
     const used = new Set<number>();
-    const pieces = (Array.isArray(args.pieces) ? args.pieces : [])
+    const validPicks = (Array.isArray(args.pieces) ? args.pieces : [])
       .filter((pick: any) => Number.isInteger(pick.idx) && pick.idx >= 0 && pick.idx < pool.length)
-      .filter((pick: any) => Number(pick.relevance_score) >= 72)
       .filter((pick: any) => {
         if (used.has(pick.idx)) return false;
         used.add(pick.idx);
         return true;
       })
+      .sort((a: any, b: any) => Number(b.relevance_score) - Number(a.relevance_score));
+    // Adaptive threshold: strict first (>=72), soft fallback top-3 (>=60)
+    const strict = validPicks.filter((p: any) => Number(p.relevance_score) >= 72);
+    const chosen = strict.length >= 2
+      ? strict
+      : validPicks.filter((p: any) => Number(p.relevance_score) >= 60).slice(0, Math.max(3, strict.length));
+    const pieces = chosen
       .slice(0, 6)
       .map((pick: any) => {
         const candidate = pool[pick.idx];

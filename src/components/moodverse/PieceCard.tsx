@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { playAudio, stopAudio, isPlaying } from "@/lib/audioManager";
 import { Button } from "@/components/ui/button";
 import { Heart, Volume2, Copy, Check, ChevronDown, Star, Loader2, Pause, Sparkles } from "lucide-react";
 import { toast } from "sonner";
@@ -34,10 +35,26 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [ttsState, setTtsState] = useState<"idle" | "loading" | "playing">("idle");
   const [similar, setSimilar] = useState<Piece[] | null>(null);
   const [simLoading, setSimLoading] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const ownerId = useId();
+
+  // Sync saved state with DB for each new piece
+  useEffect(() => {
+    setSaved(false);
+    if (!user) return;
+    let alive = true;
+    supabase.from("favorites").select("id")
+      .eq("user_id", user.id).eq("text", piece.text).limit(1)
+      .then(({ data }) => { if (alive && data && data.length) setSaved(true); });
+    return () => { alive = false; };
+  }, [user, piece.text]);
+
+  // Stop own audio on unmount
+  useEffect(() => () => { if (isPlaying(ownerId)) stopAudio(); }, [ownerId]);
 
   const lines = piece.text.split("\n");
   const long = lines.length > 12 || piece.text.length > 600;
@@ -51,10 +68,8 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
   };
 
   const speak = async () => {
-    if (ttsState === "playing" && audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      setTtsState("idle");
+    if (ttsState === "playing") {
+      stopAudio();
       return;
     }
     if (ttsState === "loading") return;
@@ -70,9 +85,8 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
       }
       const audio = new Audio(`data:${data.mime || "audio/mpeg"};base64,${data.audio}`);
       audioRef.current = audio;
-      audio.onended = () => setTtsState("idle");
-      audio.onerror = () => { setTtsState("idle"); toast.error("Ошибка воспроизведения"); };
-      await audio.play();
+      audio.onerror = () => { stopAudio(); toast.error("Ошибка воспроизведения"); };
+      await playAudio(ownerId, audio, () => setTtsState("idle"));
       setTtsState("playing");
     } catch (e) {
       console.error(e);
@@ -83,17 +97,26 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
 
   const save = async () => {
     if (!user) { toast.info("Войдите, чтобы сохранять в Избранное"); return; }
-    if (saved) return;
-    const { error } = await supabase.from("favorites").insert({
-      user_id: user.id,
-      text: piece.text,
-      author: piece.author,
-      title: piece.title,
-      source_type: piece.source_type,
-      explanation: piece.explanation,
-    });
-    if (error) toast.error("Не удалось сохранить");
-    else { setSaved(true); toast.success("В Избранном"); }
+    if (saved || saving) return;
+    setSaving(true);
+    try {
+      const { data: existing } = await supabase
+        .from("favorites").select("id")
+        .eq("user_id", user.id).eq("text", piece.text).limit(1);
+      if (existing && existing.length) { setSaved(true); toast.success("Уже в Избранном"); return; }
+      const { error } = await supabase.from("favorites").insert({
+        user_id: user.id,
+        text: piece.text,
+        author: piece.author,
+        title: piece.title,
+        source_type: piece.source_type,
+        explanation: piece.explanation,
+      });
+      if (error) toast.error("Не удалось сохранить");
+      else { setSaved(true); toast.success("В Избранном"); }
+    } finally {
+      setSaving(false);
+    }
   };
 
   const findSimilar = async () => {
