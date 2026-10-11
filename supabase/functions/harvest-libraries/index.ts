@@ -1009,7 +1009,32 @@ serve(async (req) => {
       if (claimErr) throw claimErr;
       const t = Array.isArray(task) ? task[0] : task;
       if (!t?.id) {
-        return new Response(JSON.stringify({ action, idle: true }),
+        // Idle: backfill missing embeddings in one batched request (cheap, budget-guarded).
+        let backfilled = 0;
+        if (doEmbed && (await withinBudget(supabase, 0.01))) {
+          const { data: rows } = await supabase.from("literary_works")
+            .select("id, title, author, text").is("embedding", null).limit(100);
+          if (rows?.length) {
+            const inputs = rows.map((r: any) => `${r.title ?? ""}\n${r.author ?? ""}\n${r.text ?? ""}`.slice(0, 6000));
+            const er = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
+              method: "POST",
+              headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ model: "openai/text-embedding-3-small", input: inputs }),
+            });
+            if (er.ok) {
+              const j = await er.json();
+              let tokens = 0;
+              for (const item of j.data ?? []) {
+                const row = rows[item.index];
+                if (!row || !Array.isArray(item.embedding)) continue;
+                const { error } = await supabase.from("literary_works").update({ embedding: item.embedding }).eq("id", row.id);
+                if (!error) { backfilled++; tokens += estimateTokens(inputs[item.index]); }
+              }
+              if (tokens) await logSpend(supabase, "backfill-embeddings", tokens, (tokens / 1_000_000) * EMBED_USD_PER_MTOKEN);
+            } else console.error("idle backfill embed", er.status);
+          }
+        }
+        return new Response(JSON.stringify({ action, idle: true, backfilled }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
       taskId = t.id;
