@@ -150,6 +150,7 @@ serve(async (req) => {
           author: c.author,
           title: c.title ?? "",
           source_type: c.source_type,
+          language: c.language,
           year: c.year ? String(c.year) : undefined,
           explanation: p.explanation,
           relevance_score: p.relevance_score,

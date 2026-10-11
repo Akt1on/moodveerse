@@ -349,6 +349,7 @@ ${JSON.stringify(candidatesPayload)}`;
           author: candidate.author,
           year: candidate.year ? String(candidate.year) : "",
           source_type: candidate.source_type,
+          language: candidate.language,
           text: candidate.text,
           explanation: String(pick.explanation || "").slice(0, 600),
           relevance_score: Math.round(Number(pick.relevance_score)),
