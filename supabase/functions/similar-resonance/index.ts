@@ -29,20 +29,43 @@ serve(async (req) => {
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
-    const lang = (language_pref && ["ru", "hy", "en"].includes(language_pref)) ? language_pref : null;
-    const queryText = `${text}\n${author ?? ""} ${title ?? ""}`.slice(0, 1200);
+    const lang = (language_pref && ["ru", "hy", "en", "fr", "de", "es"].includes(language_pref)) ? language_pref : null;
+    const queryText = `${title ?? ""}\n${author ?? ""}\n${text}`.slice(0, 4000);
 
-    const { data: rows, error } = await supabase.rpc("match_literary_lexical", {
-      query_text: queryText,
-      query_emotions: null,
-      preferred_language: lang,
-      match_count: 16,
+    // Semantic search by meaning (FTS with a whole poem as query almost never matches).
+    let rows: any[] = [];
+    const er = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "openai/text-embedding-3-small", input: queryText }),
     });
-    if (error) throw error;
+    if (er.ok) {
+      const emb = (await er.json()).data?.[0]?.embedding;
+      if (emb) {
+        const run = async (l: string | null) => (await supabase.rpc("match_literary_works", {
+          query_embedding: emb, match_count: 16, filter_language: l,
+          filter_emotions: null, similarity_threshold: 0.15,
+        })).data ?? [];
+        rows = await run(lang);
+        if (rows.length < 5 && lang) rows = rows.concat(await run(null));
+      }
+    } else {
+      console.error("embed error", er.status);
+    }
+    if (!rows.length) {
+      const { data } = await supabase.rpc("match_literary_lexical", {
+        query_text: `${author ?? ""} ${title ?? ""}`.trim() || text.slice(0, 120),
+        query_emotions: null, preferred_language: lang, match_count: 16,
+      });
+      rows = data ?? [];
+    }
 
-    const candidates = (rows ?? [])
+    const seenIds = new Set<string>();
+    const seed = text.trim().slice(0, 200);
+    const candidates = rows
       .filter((r: any) => r.text && r.author)
-      .filter((r: any) => !(r.author === author && r.title === title))
+      .filter((r: any) => !(r.author === author && r.title === title) && r.text.trim().slice(0, 200) !== seed)
+      .filter((r: any) => (seenIds.has(r.id) ? false : (seenIds.add(r.id), true)))
       .slice(0, 12);
 
     if (!candidates.length) {
