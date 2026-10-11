@@ -48,6 +48,12 @@ const Index = () => {
           context: input.context || null,
           results: list as any,
         });
+        // Quietly refresh the emotional profile every 5 entries (saves AI calls).
+        const { count } = await supabase.from("mood_entries")
+          .select("id", { count: "exact", head: true }).eq("user_id", user.id);
+        if (count && count >= 2 && count % 5 === 0) {
+          supabase.functions.invoke("memory-agent", { body: {} }).catch(() => {});
+        }
       }
     } catch (e: any) {
       toast.error(e?.message || "Что-то пошло не так");

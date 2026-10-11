@@ -16,6 +16,7 @@ export type Piece = {
   explanation: string;
   relevance_score: number;
   is_original?: boolean;
+  language?: string;
   curator?: { key: string; label: string; emoji: string };
   curator_votes?: { key: string; label: string; emoji: string }[];
 };
@@ -76,7 +77,7 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
 
     setTtsState("loading");
     try {
-      const language = detectLang(piece.text);
+      const language = piece.language || detectLang(piece.text);
       const { data, error } = await supabase.functions.invoke("tts-speak", {
         body: { text: piece.text.slice(0, 2800), language },
       });
@@ -129,7 +130,7 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
           author: piece.author,
           title: piece.title,
           source_type: piece.source_type,
-          language_pref: detectLang(piece.text),
+          language_pref: piece.language || detectLang(piece.text),
         },
       });
       if (error) throw error;

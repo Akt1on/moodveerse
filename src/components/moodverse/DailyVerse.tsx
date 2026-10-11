@@ -36,7 +36,7 @@ export const DailyVerse = () => {
 
   useEffect(() => {
     const tz = -new Date().getTimezoneOffset(); // minutes east of UTC
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date(Date.now() + tz * 60_000).toISOString().slice(0, 10);
     const cacheKey = `${CACHE_KEY}_${locale}`;
 
     try {

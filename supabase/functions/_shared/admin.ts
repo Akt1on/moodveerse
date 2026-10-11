@@ -18,6 +18,14 @@ export async function requireAdmin(req: Request): Promise<{ ok: true } | { ok: f
   const header = req.headers.get("Authorization") ?? "";
   const token = header.replace(/^Bearer\s+/i, "").trim();
 
+  // Internal cron / maintenance calls authenticate with the shared cron token.
+  const cronToken = req.headers.get("x-cron-token");
+  if (cronToken) {
+    const { data } = await serviceClient().from("app_config").select("value").eq("key", "cron_token").maybeSingle();
+    if (data?.value && data.value === cronToken) return { ok: true };
+    return { ok: false, status: 403, error: "Неверный cron-токен" };
+  }
+
   if (!token) return { ok: false, status: 401, error: "Требуется авторизация" };
   if (token === SERVICE_ROLE) return { ok: true };
   if (token === ANON) return { ok: false, status: 403, error: "Доступ только для администратора" };

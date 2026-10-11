@@ -20,10 +20,16 @@ const Favorites = () => {
   const { user, loading } = useAuth();
   const [favs, setFavs] = useState<Fav[]>([]);
   const [q, setQ] = useState("");
+  const [dq, setDq] = useState("");
   const [filter, setFilter] = useState<string>("all");
   const [busy, setBusy] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+
+  useEffect(() => {
+    const id = setTimeout(() => setDq(q.trim()), 300);
+    return () => clearTimeout(id);
+  }, [q]);
 
   const loadPage = useCallback(async (from: number) => {
     let query = supabase
@@ -31,12 +37,16 @@ const Favorites = () => {
       .select("*")
       .order("created_at", { ascending: false });
     if (filter !== "all") query = query.eq("source_type", filter);
+    if (dq) {
+      const s = dq.replace(/[%,()*]/g, " ");
+      query = query.or(`text.ilike.%${s}%,author.ilike.%${s}%,title.ilike.%${s}%`);
+    }
     const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
     if (error) { toast.error("Не удалось загрузить"); return []; }
-    const rows = (data ?? []) as any as Fav[];
+    const rows = (data ?? []) as Fav[];
     setHasMore(rows.length === PAGE_SIZE);
     return rows;
-  }, [filter]);
+  }, [filter, dq]);
 
   useEffect(() => {
     if (!user) return;

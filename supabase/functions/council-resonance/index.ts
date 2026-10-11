@@ -351,6 +351,7 @@ ${userMemory ? `\nЭМОЦИОНАЛЬНЫЙ ПРОФИЛЬ (учти, не ци
         author: cand.author,
         year: cand.year ? String(cand.year) : "",
         source_type: cand.source_type,
+        language: cand.language,
         text: cand.text,
         explanation: primary.explanation,
         relevance_score: avgScore,
