@@ -8,6 +8,7 @@ import { SEED_EN } from "./seed-data-english.ts";
 import { SEED_HY_EXTRA } from "./seed-data-armenian-extra.ts";
 import { SEED_RU_EXTRA } from "./seed-data-russian-extra.ts";
 import { SEED_HY_V2 } from "./seed-data-armenian-v2.ts";
+import { SEED_GOLDEN } from "./seed-data-golden.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -59,7 +60,7 @@ serve(async (req) => {
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
 
-    const ALL_SEED = [...SEED, ...SEED_HY, ...SEED_EXTRA, ...SEED_BIBLE, ...SEED_EN, ...SEED_HY_EXTRA, ...SEED_RU_EXTRA, ...SEED_HY_V2];
+    const ALL_SEED = [...SEED, ...SEED_HY, ...SEED_EXTRA, ...SEED_BIBLE, ...SEED_EN, ...SEED_HY_EXTRA, ...SEED_RU_EXTRA, ...SEED_HY_V2, ...SEED_GOLDEN];
 
     const { count } = await supabase
       .from("literary_works")
