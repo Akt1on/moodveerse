@@ -869,6 +869,124 @@ async function fetchCuratedAuthors(supabase: any, limit: number, languages: stri
   return pieces.slice(0, limit);
 }
 
+// ---------- Source: author corpus (walks a Wikisource author portal page by page) ----------
+// Unlike name search, this reads the author's own portal, so every link is that author's work.
+// Cursor "authorcorpus/state" = {"a": authorIndex, "o": linkOffset}; it advances until the
+// whole canon is covered, then starts over (dedup by external_id keeps reruns free).
+const AUTHOR_CORPUS: { lang: string; portal: string; name: string; surname: string }[] = [
+  { lang: "hy", portal: "Հեղինակ:Հովհաննես Թումանյան", name: "Ованес Туманян", surname: "Թումանյան" },
+  { lang: "hy", portal: "Հեղինակ:Եղիշե Չարենց", name: "Егише Чаренц", surname: "Չարենց" },
+  { lang: "hy", portal: "Հեղինակ:Պարույր Սևակ", name: "Паруйр Севак", surname: "Սևակ" },
+  { lang: "hy", portal: "Հեղինակ:Վահան Տերյան", name: "Ваан Терьян", surname: "Տերյան" },
+  { lang: "hy", portal: "Հեղինակ:Ավետիք Իսահակյան", name: "Аветик Исаакян", surname: "Իսահակյան" },
+  { lang: "hy", portal: "Հեղինակ:Սիամանթո", name: "Сиаманто", surname: "Սիամանթո" },
+  { lang: "hy", portal: "Հեղինակ:Դանիել Վարուժան", name: "Даниэл Варужан", surname: "Վարուժան" },
+  { lang: "hy", portal: "Հեղինակ:Միսաք Մեծարենց", name: "Мисак Мецаренц", surname: "Մեծարենց" },
+  { lang: "hy", portal: "Հեղինակ:Սայաթ-Նովա", name: "Саят-Нова", surname: "Սայաթ" },
+  { lang: "hy", portal: "Հեղինակ:Հովհաննես Շիրազ", name: "Ованес Шираз", surname: "Շիրազ" },
+  { lang: "ru", portal: "Автор:Александр Александрович Блок", name: "Александр Блок", surname: "Блок" },
+  { lang: "ru", portal: "Автор:Александр Сергеевич Пушкин", name: "Александр Пушкин", surname: "Пушкин" },
+  { lang: "ru", portal: "Автор:Михаил Юрьевич Лермонтов", name: "Михаил Лермонтов", surname: "Лермонтов" },
+  { lang: "ru", portal: "Автор:Фёдор Иванович Тютчев", name: "Фёдор Тютчев", surname: "Тютчев" },
+  { lang: "ru", portal: "Автор:Афанасий Афанасьевич Фет", name: "Афанасий Фет", surname: "Фет" },
+  { lang: "ru", portal: "Автор:Сергей Александрович Есенин", name: "Сергей Есенин", surname: "Есенин" },
+  { lang: "ru", portal: "Автор:Иван Алексеевич Бунин", name: "Иван Бунин", surname: "Бунин" },
+  { lang: "ru", portal: "Автор:Николай Степанович Гумилёв", name: "Николай Гумилёв", surname: "Гумил" },
+  { lang: "ru", portal: "Автор:Евгений Абрамович Баратынский", name: "Евгений Баратынский", surname: "Баратынск" },
+  { lang: "ru", portal: "Автор:Константин Дмитриевич Бальмонт", name: "Константин Бальмонт", surname: "Бальмонт" },
+  { lang: "ru", portal: "Автор:Иннокентий Фёдорович Анненский", name: "Иннокентий Анненский", surname: "Анненск" },
+  { lang: "ru", portal: "Автор:Валерий Яковлевич Брюсов", name: "Валерий Брюсов", surname: "Брюсов" },
+];
+
+const CORPUS_SKIP = /ժողովածու|Երկերի|Собрание сочинений|Полное собрание|Стихотворения \(|Список|Указатель|Индекс|Index/i;
+
+/** Splits a long poem into stanza-aligned chunks that fit the quality gate (≤1400 chars). */
+export function chunkPoem(text: string, max = 1400): string[] {
+  const stanzas = text.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+  const out: string[] = [];
+  let cur = "";
+  for (const s of stanzas) {
+    if (s.length > max) { if (cur) out.push(cur); cur = ""; continue; }
+    if ((cur ? cur.length + 2 : 0) + s.length > max) { out.push(cur); cur = s; }
+    else cur = cur ? `${cur}\n\n${s}` : s;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+async function fetchAuthorCorpus(supabase: any, limit: number, languages: string[]): Promise<Piece[]> {
+  const pieces: Piece[] = [];
+  const pool = AUTHOR_CORPUS.filter((a) => languages.includes(a.lang));
+  if (!pool.length) return pieces;
+  const UA = { headers: { "User-Agent": "moodverse-harvester/1.0 (contact: moodverse)" } };
+
+  let state = { a: 0, o: 0 };
+  try { state = { ...state, ...JSON.parse((await getCursor(supabase, "authorcorpus", "state")) ?? "{}") }; } catch { /* reset */ }
+  if (state.a >= pool.length) state = { a: 0, o: 0 };
+
+  const PAGES_PER_RUN = 18;
+  let pagesDone = 0, authorsTried = 0;
+  while (pagesDone < PAGES_PER_RUN && pieces.length < limit && authorsTried < pool.length) {
+    const au = pool[state.a];
+    const host = `https://${au.lang}.wikisource.org/w/api.php`;
+    // Collect every main-namespace link on the portal (follows plcontinue past 500).
+    const titles: string[] = [];
+    let plc: string | null = null;
+    for (let guard = 0; guard < 6; guard++) {
+      const u = new URL(host);
+      Object.entries({ action: "query", format: "json", origin: "*", prop: "links", plnamespace: "0",
+        pllimit: "500", titles: au.portal, redirects: "1" }).forEach(([k, v]) => u.searchParams.set(k, v));
+      if (plc) u.searchParams.set("plcontinue", plc);
+      try {
+        const r = await fetch(u, UA);
+        if (!r.ok) break;
+        const j = await r.json();
+        for (const p of Object.values(j?.query?.pages ?? {}) as any[]) for (const l of p?.links ?? []) titles.push(l.title);
+        plc = j?.continue?.plcontinue ?? null;
+        if (!plc) break;
+      } catch { break; }
+    }
+    // Keep only the author's own pieces: no subpages of other works, no collection indexes.
+    const works = titles.filter((t) => !CORPUS_SKIP.test(t) && (!t.includes("(") || t.includes(au.surname)));
+
+    const slice = works.slice(state.o, state.o + (PAGES_PER_RUN - pagesDone));
+    for (const title of slice) {
+      pagesDone++;
+      try {
+        await new Promise((res) => setTimeout(res, 300));
+        const u = new URL(host);
+        Object.entries({ action: "parse", format: "json", origin: "*", prop: "text", page: title, redirects: "1" })
+          .forEach(([k, v]) => u.searchParams.set(k, v));
+        const r = await fetch(u, UA);
+        if (!r.ok) continue;
+        const j = await r.json();
+        const pageid = j?.parse?.pageid;
+        const text = wikiHtmlToText((j?.parse?.text?.["*"] ?? "").toString())
+          .split("\n").filter((l: string) => !WIKI_NOISE.test(l)).join("\n").trim();
+        if (!pageid || text.length < 120) continue;
+        const cleanTitle = title.replace(/\s*\([^)]*\)\s*$/, "").slice(0, 200);
+        chunkPoem(text).slice(0, 4).forEach((chunk, ci) => {
+          pieces.push({
+            text: chunk,
+            author: au.name,
+            title: cleanTitle,
+            source_type: "poem",
+            language: au.lang,
+            emotions_tags: tagEmotions(chunk),
+            external_id: `corpus:${au.lang}:${pageid}:${ci}`,
+          });
+        });
+      } catch { /* skip page */ }
+    }
+
+    state.o += slice.length;
+    if (state.o >= works.length) { state = { a: (state.a + 1) % pool.length, o: 0 }; authorsTried++; }
+  }
+
+  await setCursor(supabase, "authorcorpus", "state", JSON.stringify(state));
+  return pieces.slice(0, limit);
+}
+
 
 // ---------- Source: Open Library / Gutenberg full-text prose passages ----------
 async function fetchOpenLibrary(supabase: any, limit: number, languages: string[]): Promise<Piece[]> {
