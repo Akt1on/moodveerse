@@ -32,7 +32,7 @@ const Index = () => {
       const { data, error } = await supabase.functions.invoke(fn, { body: input });
       if (error) {
         const msg = (error as any)?.context?.error || error.message;
-        toast.error(msg || "Не удалось получить отклик");
+        toast.error(/Failed to send|fetch/i.test(String(msg)) ? "Сервер просыпается. Подождите минуту и повторите попытку." : (msg || "Не удалось получить отклик"));
         setLoading(false);
         return;
       }

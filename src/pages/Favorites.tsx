@@ -38,7 +38,7 @@ const Favorites = () => {
       .order("created_at", { ascending: false });
     if (filter !== "all") query = query.eq("source_type", filter);
     if (dq) {
-      const s = dq.replace(/[%,()*]/g, " ");
+      const s = dq.replace(/[%,()*"'\\.:]/g, " ");
       query = query.or(`text.ilike.%${s}%,author.ilike.%${s}%,title.ilike.%${s}%`);
     }
     const { data, error } = await query.range(from, from + PAGE_SIZE - 1);

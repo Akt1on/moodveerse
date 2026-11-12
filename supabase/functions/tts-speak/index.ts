@@ -32,10 +32,22 @@ Deno.serve(async (req: Request): Promise<Response> => {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (text.length > 3000) {
-      return new Response(JSON.stringify({ error: "text too long (max 3000)" }), {
+    if (text.length > 1200) {
+      return new Response(JSON.stringify({ error: "text too long (max 1200)" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    {
+      const { createClient } = await import("npm:@supabase/supabase-js@2");
+      const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+      const ip = (req.headers.get("x-forwarded-for") ?? "anon").split(",")[0].trim();
+      const { data: ok } = await admin.rpc("check_rate_limit", { p_identifier: ip, p_endpoint: "tts", p_max: 20, p_window_seconds: 3600 });
+      if (ok === false) {
+        return new Response(JSON.stringify({ error: "rate_limited" }), {
+          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     const apiKey = Deno.env.get("ELEVENLABS_API_KEY");

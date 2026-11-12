@@ -1093,7 +1093,7 @@ serve(async (req) => {
     const ALL_SOURCES = [
       "poetrydb", "gutendex", "wikisource", "wikiquote", "standardebooks",
       "quotable", "poemist", "internetarchive", "wikirandom", "openlibrary", "firecrawl",
-      "curatedauthors",
+      "curatedauthors", "authorcorpus",
     ];
 
     // ---------- planner: fill the queue, one bounded task per source ----------
@@ -1189,6 +1189,7 @@ serve(async (req) => {
       if (sources.includes("openlibrary")) all.push(...await fetchOpenLibrary(supabase, taskLimit, taskLangs));
       if (sources.includes("firecrawl")) all.push(...await fetchFirecrawl(supabase, taskLimit, taskLangs));
       if (sources.includes("curatedauthors")) all.push(...await fetchCuratedAuthors(supabase, taskLimit, taskLangs));
+      if (sources.includes("authorcorpus")) all.push(...await fetchAuthorCorpus(supabase, taskLimit, taskLangs));
       harvested = all.length;
 
       // Quality gate: clean markup and drop truncated / junk fragments.

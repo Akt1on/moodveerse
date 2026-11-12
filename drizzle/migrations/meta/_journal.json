@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1794461977994,
+      "tag": "0000_disable_harvest_cron",
+      "breakpoints": true
+    }
+  ]
+}
