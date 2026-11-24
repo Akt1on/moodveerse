@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { AudioLines, Mic, Square } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { PieceCard, Piece } from "@/components/moodverse/PieceCard";
+import { InkVortex } from "@/components/moodverse/InkVortex";
 
 type Lang = "ru" | "hy" | "en";
 const speechLang: Record<Lang, string> = { ru: "ru-RU", hy: "hy-AM", en: "en-US" };
@@ -81,11 +82,13 @@ export const PoetryShazam = () => {
                     disabled={listening} onClick={() => setLang(l)}>{labels[l]}</Button>
                 ))}
               </div>
-              <button aria-label={listening ? "Остановить" : "Слушать"} onClick={listening ? stop : start}
-                className="relative h-32 w-32 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg">
-                {listening && <span className="absolute inset-0 rounded-full bg-primary/40 animate-ping" />}
-                {listening ? <Square className="h-10 w-10 relative" /> : <Mic className="h-12 w-12 relative" />}
-              </button>
+              <div className="relative h-[260px] w-[260px] flex items-center justify-center">
+                <InkVortex active={listening || searching} />
+                <button aria-label={listening ? "Остановить" : "Слушать"} onClick={listening ? stop : start}
+                  className="relative z-10 h-20 w-20 rounded-full bg-primary/90 text-primary-foreground flex items-center justify-center shadow-lg backdrop-blur-md ring-1 ring-primary-foreground/30 transition-transform hover:scale-105 active:scale-95">
+                  {listening ? <Square className="h-7 w-7" /> : <Mic className="h-8 w-8" />}
+                </button>
+              </div>
               <p className="text-sm text-muted-foreground italic text-center min-h-[1.5rem]">
                 {listening ? (heard || "Слушаю строки…") : searching ? "Ищу в библиотеке…" : heard ? `«${heard}»` : "Нажмите и говорите до 8 секунд"}
               </p>
