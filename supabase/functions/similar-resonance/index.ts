@@ -28,6 +28,13 @@ serve(async (req) => {
     const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
+    const ip = (req.headers.get("x-forwarded-for") ?? "anon").split(",")[0].trim();
+    const { data: allowed } = await supabase.rpc("check_rate_limit", { p_identifier: ip, p_endpoint: "similar", p_max: 15, p_window_seconds: 3600 });
+    if (allowed === false) {
+      return new Response(JSON.stringify({ error: "Слишком много запросов. Попробуйте через час." }), {
+        status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const lang = (language_pref && ["ru", "hy", "en", "fr", "de", "es"].includes(language_pref)) ? language_pref : null;
     const queryText = `${title ?? ""}\n${author ?? ""}\n${text}`.slice(0, 4000);

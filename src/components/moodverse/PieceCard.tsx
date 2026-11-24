@@ -70,6 +70,8 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
 
   const speak = async () => {
     if (ttsState === "playing") {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
+      setTtsState("idle");
       stopAudio();
       return;
     }
@@ -79,7 +81,7 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
     try {
       const language = piece.language || detectLang(piece.text);
       const { data, error } = await supabase.functions.invoke("tts-speak", {
-        body: { text: piece.text.slice(0, 2800), language },
+        body: { text: piece.text.slice(0, 1200), language },
       });
       if (error || !data?.audio) {
         throw new Error(error?.message || "TTS failed");
@@ -91,6 +93,18 @@ export const PieceCard = ({ piece, index }: { piece: Piece; index: number }) => 
       setTtsState("playing");
     } catch (e) {
       console.error(e);
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        const u = new SpeechSynthesisUtterance(piece.text.slice(0, 3000));
+        const l = piece.language || detectLang(piece.text);
+        u.lang = l === "hy" ? "hy-AM" : l === "en" ? "en-US" : "ru-RU";
+        u.rate = 0.95;
+        u.onend = () => setTtsState("idle");
+        u.onerror = () => setTtsState("idle");
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(u);
+        setTtsState("playing");
+        return;
+      }
       toast.error("Не удалось озвучить");
       setTtsState("idle");
     }

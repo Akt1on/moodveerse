@@ -161,12 +161,12 @@ serve(async (req) => {
 
     // Retry #1 — relax the semantic threshold and drop the emotion bonus filter.
     if (rowCount(vecResp) < 10) {
-      const relaxed = await runVector(0.22, 48, lang, false);
+      const relaxed = await runVector(0.15, 48, lang, false);
       if (rowCount(relaxed) > rowCount(vecResp)) vecResp = relaxed;
     }
     // Retry #2 — drop the language filter entirely when the pool is still thin.
     if (rowCount(vecResp) < 6 && lang) {
-      const anyLang = await runVector(0.22, 48, null, false);
+      const anyLang = await runVector(0.15, 48, null, false);
       if (rowCount(anyLang) > rowCount(vecResp)) vecResp = anyLang;
     }
     // FTS fallback — search the raw phrase when the composed query found nothing.
