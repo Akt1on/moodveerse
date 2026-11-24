@@ -12,6 +12,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
+import { PoetryShazam } from "@/components/moodverse/PoetryShazam";
 
 const Index = () => {
   const { user } = useAuth();
@@ -81,6 +82,8 @@ const Index = () => {
             </div>
           </section>
         )}
+
+        {!pieces && !loading && <div className="flex justify-center mb-6"><PoetryShazam /></div>}
 
         {!pieces && !loading && <DailyVerse />}
 
